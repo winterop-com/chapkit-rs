@@ -104,11 +104,14 @@ struct Entry {
     record: JobRecord,
     abort: Option<AbortHandle>,
     done: Arc<Notify>,
+    /// Submission order (ULIDs from the same millisecond are not ordered).
+    seq: u64,
 }
 
 #[derive(Default)]
 struct Inner {
     jobs: HashMap<Ulid, Entry>,
+    next_seq: u64,
 }
 
 /// The scheduler. Cheap to clone.
@@ -152,14 +155,20 @@ impl Scheduler {
             error_traceback: None,
         };
         let done = Arc::new(Notify::new());
-        self.lock().jobs.insert(
-            id,
-            Entry {
-                record,
-                abort: None,
-                done: done.clone(),
-            },
-        );
+        {
+            let mut inner = self.lock();
+            inner.next_seq += 1;
+            let seq = inner.next_seq;
+            inner.jobs.insert(
+                id,
+                Entry {
+                    record,
+                    abort: None,
+                    done: done.clone(),
+                    seq,
+                },
+            );
+        }
 
         let this = self.clone();
         let handle = tokio::spawn(async move {
@@ -198,15 +207,15 @@ impl Scheduler {
 
     /// All records, newest submission first, optionally filtered by status.
     pub fn list(&self, status: Option<JobStatus>) -> Vec<JobRecord> {
-        let mut v: Vec<JobRecord> = self
-            .lock()
+        let inner = self.lock();
+        let mut v: Vec<(u64, JobRecord)> = inner
             .jobs
             .values()
-            .map(|e| e.record.clone())
-            .filter(|r| status.is_none_or(|s| r.status == s))
+            .filter(|e| status.is_none_or(|s| e.record.status == s))
+            .map(|e| (e.seq, e.record.clone()))
             .collect();
-        v.sort_by_key(|r| std::cmp::Reverse(r.id));
-        v
+        v.sort_by_key(|(seq, _)| std::cmp::Reverse(*seq));
+        v.into_iter().map(|(_, r)| r).collect()
     }
 
     /// Cancel a job if it has not finished, then forget it. Returns false if unknown.

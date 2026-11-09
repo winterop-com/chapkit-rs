@@ -114,6 +114,14 @@ impl App {
             ));
         }
         let router = router.layer(axum::middleware::from_fn(request_id));
+        // Decode `%24` to `$` before routing, so `$`-operations match however they are
+        // spelled. Starlette (Python chapkit) routes on the decoded path and chap-core's
+        // service proxy forwards `%24`; axum routes on the raw path.
+        let router = Router::new().fallback_service(
+            tower::ServiceBuilder::new()
+                .map_request(decode_dollar)
+                .service(router),
+        );
         (router, doc, self.registration, self.id, self.info)
     }
 
@@ -139,6 +147,28 @@ impl App {
         }
         res
     }
+}
+
+/// Rewrite `%24` (any case) in the request path to `$`; the query is left untouched.
+fn decode_dollar<B>(mut req: axum::http::Request<B>) -> axum::http::Request<B> {
+    let uri = req.uri();
+    let path = uri.path();
+    if !path.contains("%24") {
+        return req;
+    }
+    let decoded = path.replace("%24", "$");
+    let pq = match uri.query() {
+        Some(q) => format!("{decoded}?{q}"),
+        None => decoded,
+    };
+    let mut parts = uri.clone().into_parts();
+    if let Ok(v) = pq.parse() {
+        parts.path_and_query = Some(v);
+        if let Ok(new_uri) = axum::http::Uri::from_parts(parts) {
+            *req.uri_mut() = new_uri;
+        }
+    }
+    req
 }
 
 async fn shutdown_signal() {

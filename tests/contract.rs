@@ -4,18 +4,82 @@
     clippy::panic,
     clippy::too_many_lines
 )]
-//! The chapkit HTTP contract, end to end and in-process: the exact flow chap-core
-//! runs (config, $train, poll job, $predict, poll job, read artifact), plus error shapes.
+//! The chapkit HTTP contract, end to end and in-process, with a tiny model defined
+//! here: the exact flow chap-core runs (config, $train, poll job, $predict, poll job,
+//! read artifact), plus error shapes. Model-specific checks (parity with chap-core's
+//! baselines) live in the chapkit-rs-examples repository.
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chapkit::{
+    DataFrame, Model, ModelInfo, PredictInput, Result as ModelResult, TrainInput, cols,
+    prediction_frame,
+};
 use http_body_util::BodyExt;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use tower::ServiceExt;
 
+/// Per-location mean times `scale`, every sample the same.
+struct MeanModel;
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct MeanConfig {
+    #[serde(default = "one")]
+    scale: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+impl Model for MeanModel {
+    type Config = MeanConfig;
+    type Trained = HashMap<String, f64>;
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &MeanConfig, input: TrainInput<'_>) -> ModelResult<HashMap<String, f64>> {
+        let y = input.data.f64_column(cols::DISEASE_CASES)?;
+        Ok(input
+            .data
+            .group_indices(cols::LOCATION)?
+            .into_iter()
+            .map(|(loc, idx)| {
+                (
+                    loc,
+                    idx.iter().map(|&i| y[i]).sum::<f64>() / idx.len() as f64,
+                )
+            })
+            .collect())
+    }
+
+    fn predict(
+        &self,
+        t: &HashMap<String, f64>,
+        cfg: &MeanConfig,
+        input: PredictInput<'_>,
+    ) -> ModelResult<DataFrame> {
+        let loc = input.future.require(cols::LOCATION)?;
+        prediction_frame(input.future, 10, |row, out| {
+            let m = loc
+                .str_at(row)
+                .and_then(|l| t.get(l))
+                .copied()
+                .unwrap_or(0.0);
+            out.fill(m * cfg.scale);
+            Ok(())
+        })
+    }
+}
+
 fn app() -> Router {
-    chapkit::Service::new("global-median", "Global median", baselines::GlobalMedian)
+    chapkit::Service::new("mean", "Mean", MeanModel)
         .database(":memory:")
         .app()
         .unwrap()
@@ -51,13 +115,23 @@ async fn call(
     (status, value, headers)
 }
 
+/// Two locations x 12 months of training data, then 3 future months.
 fn fixture() -> Value {
-    let raw = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/baselines_monthly.json"
-    ))
-    .unwrap();
-    serde_json::from_str(&raw).unwrap()
+    let (mut train, mut future) = (vec![], vec![]);
+    for loc in ["A", "B"] {
+        for m in 1..=12 {
+            let y = if loc == "A" { 10.0 } else { 20.0 };
+            train.push(json!([format!("2024-{m:02}"), loc, y, 100.0]));
+        }
+        for m in 1..=3 {
+            future.push(json!([format!("2025-{m:02}"), loc, 100.0]));
+        }
+    }
+    json!({
+        "train": {"columns": ["time_period", "location", "disease_cases", "rainfall"], "data": train},
+        "historic": {"columns": ["time_period", "location", "disease_cases", "rainfall"], "data": train},
+        "future": {"columns": ["time_period", "location", "rainfall"], "data": future},
+    })
 }
 
 #[tokio::test]
@@ -74,7 +148,7 @@ async fn chap_core_flow() {
 
     let (s, info, _) = call(&app, "GET", "/api/v1/info", None).await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(info["id"], "global-median");
+    assert_eq!(info["id"], "mean");
     assert_eq!(info["target"], "disease_cases");
     assert!(
         info["model_metadata"]
@@ -87,14 +161,14 @@ async fn chap_core_flow() {
     assert!(schema["properties"]["prediction_periods"].is_object());
 
     // chap-core sends flat options plus covariates and checks they come back unchanged.
-    let sent = json!({"name": "cfg", "data": {"additional_continuous_covariates": ["rainfall"], "prediction_periods": 6}});
+    let sent = json!({"name": "cfg", "data": {"additional_continuous_covariates": ["rainfall"], "prediction_periods": 3}});
     let (s, cfg, headers) = call(&app, "POST", "/api/v1/configs", Some(sent)).await;
     assert_eq!(s, StatusCode::CREATED, "{cfg}");
     assert_eq!(
         cfg["data"]["additional_continuous_covariates"],
         json!(["rainfall"])
     );
-    assert_eq!(cfg["data"]["prediction_periods"], 6);
+    assert_eq!(cfg["data"]["prediction_periods"], 3);
     for k in ["id", "created_at", "updated_at", "tags", "name", "data"] {
         assert!(cfg.get(k).is_some(), "ConfigOut missing {k}");
     }
@@ -108,7 +182,7 @@ async fn chap_core_flow() {
     assert_eq!(list.as_array().unwrap().len(), 1);
 
     let train_body =
-        json!({"config_id": config_id, "data": fx["train"], "run_info": {"prediction_length": 6}});
+        json!({"config_id": config_id, "data": fx["train"], "run_info": {"prediction_length": 3}});
     let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$train", Some(train_body)).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
     let (job_id, model_id) = (
@@ -120,7 +194,7 @@ async fn chap_core_flow() {
     let (_, job, _) = call(&app, "GET", &format!("/api/v1/jobs/{job_id}"), None).await;
     assert_eq!(job["status"], "completed", "{job}");
 
-    let predict_body = json!({"artifact_id": model_id, "historic": fx["historic"], "future": fx["future"], "run_info": {"prediction_length": 6}});
+    let predict_body = json!({"artifact_id": model_id, "historic": fx["historic"], "future": fx["future"], "run_info": {"prediction_length": 3}});
     let (s, sub, _) = call(
         &app,
         "POST",
@@ -186,16 +260,14 @@ async fn chap_core_flow() {
         fx["future"]["data"].as_array().unwrap().len()
     );
 
-    // The served forecast equals chap-core's own global_median, sample for sample.
-    let expected = &fx["predictions"]["global_median"];
-    for row in content["data"].as_array().unwrap() {
-        let (tp, loc) = (row[0].as_str().unwrap(), row[1].as_str().unwrap());
-        let key = format!("{loc}|{}", tp.replace('-', ""));
-        let want = expected[&key].as_array().unwrap();
-        for (g, w) in row.as_array().unwrap()[2..].iter().zip(want) {
-            assert!((g.as_f64().unwrap() - w.as_f64().unwrap()).abs() < 1e-9);
-        }
-    }
+    // Model output: per-location mean times the config's default scale.
+    let first = &content["data"][0];
+    assert_eq!(first[1], "A");
+    assert_eq!(first[2], 10.0);
+    assert_eq!(
+        cfg["data"]["scale"], 1.0,
+        "model defaults are filled into the stored config"
+    );
 
     // Fast path: same forecast, returned directly.
     let (s, frame, _) = call(&app, "POST", "/api/v1/ml/$predict-sync", Some(predict_body)).await;

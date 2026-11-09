@@ -22,9 +22,9 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - `crates/chapkit-store`: async `Store` trait and its SQLite backend (rusqlite); no HTTP.
 - root package `chapkit`: the crate users depend on. `Service` turns a `Model` into the full
   chapkit-compatible API; re-exports the crates above.
-- `examples/<crate>/`: example model crates, each with its own `Cargo.toml` depending on `chapkit` by path,
-  its own tests and benches. `examples/baselines` ports chap-core's baselines (one binary per model);
-  `examples/ridge` is the covariate model for xAI/HPO work. Example models are not part of the library.
+- `tests/contract.rs`: the chapkit HTTP contract end to end, with a tiny model defined in the test.
+- Example models live in the sibling repository `../chapkit-rs-examples` (chap-core baseline ports with
+  parity tests, ridge). They depend on this library by path; run their `make check` after API changes.
 
 ## Workflow
 
@@ -52,5 +52,5 @@ when a call is a plain function call, not a 2-3 s job round trip.
 ## Tests
 
 1. Add a test for every new feature or fix.
-2. Baseline examples are ports of chap-core's built-in baselines and must match them number for number
-   (`tests/baselines_parity.rs`). Regenerate the fixtures with `make fixtures` when chap-core's baselines change.
+2. HTTP behaviour that chap-core relies on is pinned in `tests/contract.rs`; keep it passing and extend it
+   when the API changes.

@@ -22,12 +22,22 @@ tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 
+[dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower.workspace = true
+ulid.workspace = true
+
 [lints]
 workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples/*"]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -90,3 +100,7 @@ result_large_err = "allow"
 
 [profile.bench]
 debug = true
+
+[profile.release]
+strip = true
+lto = "thin"

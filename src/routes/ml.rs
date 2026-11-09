@@ -96,6 +96,12 @@ async fn predict_sync(
     Json(req): Json<PredictRequest>,
 ) -> ApiResult<axum::Json<DataFrame>> {
     let artifact_id = ulid_field("artifact_id", &req.artifact_id)?;
+    let _permit = s
+        .inner
+        .sync_permits
+        .acquire()
+        .await
+        .map_err(|_| Problem::internal())?;
     let (frame, _) = ml::predict_frame(
         &s,
         &artifact_id,

@@ -22,19 +22,18 @@ Measured with `make bench` on an Apple Silicon laptop.
 
 Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-process Rust models.
 
-## Status
+## Layout
 
-Early. Done:
+| crate | role |
+|---|---|
+| `chapkit` (root) | What model authors depend on. `Service` turns a `Model` into the full chapkit HTTP API. |
+| `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints. Pure: no IO. |
+| `chapkit-dataframe` | Columnar `DataFrame` with the chapkit `{columns, data}` wire format. |
+| `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, auth, registration, OpenAPI. |
+| `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend. |
 
-- `chapkit-dataframe`: columnar `DataFrame` with the chapkit `{columns, data, schema?}` wire format
-- `chapkit-core`: the `Model` trait, run info, model info, chap-core search spaces, chap period ids
-- Example models: ports of chap-core's built-in baselines, verified against chap-core number for number
-
-Next:
-
-- HTTP layer: chapkit-compatible `/health`, `/api/v1/info`, configs, artifacts, jobs, `$train` and `$predict`
-- Fast paths: synchronous predict, in-process `$explain` (LIME/SHAP) and `$hpo`
-- safetensors checkpoints and pre-trained models
+Example models (ports of chap-core's baselines, checked against chap-core number for number, and a
+covariate model for xAI/HPO) live next door in `../chapkit-rs-examples`.
 
 ## A model
 
@@ -61,25 +60,24 @@ impl Model for MyModel {
 }
 ```
 
-## Examples
+## Serving
 
-Ports of chap-core's built-in baselines (`chap_core/models/builtin`), plus a small covariate model:
-
-```sh
-make examples-release                       # release binaries into ./bin
-bin/global-median                           # serve on 127.0.0.1:8000 (HOST, PORT to change)
-bin/seasonal-median demo                    # run once in-process and time it
-cargo run --release -p ridge                # or straight from cargo
+```rust,ignore
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    chapkit::Service::new("my-model", "My model", MyModel).serve().await
+}
 ```
 
-Each example is its own crate under `examples/`, depending on `chapkit` by path, the way a model
-project would.
+Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by default),
+`SERVICEKIT_ORCHESTRATOR_URL` to register with chap-core, `SERVICEKIT_API_KEYS` for auth,
+`CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1 job at a time),
+`CHAPKIT_SYNC_CONCURRENCY` (cores), `LOG_LEVEL`, `LOG_FORMAT=json`.
 
 ## Development
 
 ```sh
 make lint      # fmt + clippy, warnings are errors
-make test      # all tests, including parity with chap-core's baselines
+make test      # all tests, including the chapkit HTTP contract
 make bench     # criterion benchmarks
-make fixtures  # regenerate baseline golden outputs from a chap-core checkout (CHAP_CORE=../chap-core)
 ```

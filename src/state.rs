@@ -26,6 +26,8 @@ pub(crate) struct Inner {
     pub service_id: String,
     pub version: String,
     pub eager_wait: Duration,
+    /// Bounds concurrent synchronous model calls (`$predict-sync`) to the CPU budget.
+    pub sync_permits: tokio::sync::Semaphore,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
                 service_id,
                 version,
                 eager_wait,
+                sync_permits: tokio::sync::Semaphore::new(sync_concurrency()),
             }),
         }
     }
@@ -76,6 +79,17 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .put(artifact_id, trained);
     }
+}
+
+/// Concurrent `$predict-sync` calls: `CHAPKIT_SYNC_CONCURRENCY`, else the number of cores.
+fn sync_concurrency() -> usize {
+    std::env::var("CHAPKIT_SYNC_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        })
+        .max(1)
 }
 
 /// Map store errors onto problem responses. Database details are logged, not returned.

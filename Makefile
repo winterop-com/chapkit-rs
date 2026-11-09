@@ -1,4 +1,4 @@
-.PHONY: help build lint fmt test bench examples fixtures doc clean
+.PHONY: help check build lint fmt test bench examples fixtures doc clean
 
 EXAMPLES := global_median seasonal_median seasonal_shift_persistence ridge
 CHAP_CORE ?= ../chap-core
@@ -7,6 +7,7 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
+	@echo "  check     lint + test; run before every commit"
 	@echo "  build     Build the workspace, examples and benches"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
@@ -16,6 +17,8 @@ help:
 	@echo "  fixtures  Regenerate baseline golden outputs from chap-core (CHAP_CORE=$(CHAP_CORE))"
 	@echo "  doc       Build API docs"
 	@echo "  clean     Remove build output"
+
+check: lint test
 
 build:
 	@cargo build --workspace --all-targets

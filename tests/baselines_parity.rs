@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! The Rust baselines must reproduce chap-core's built-in baselines number for number.
 //! The models are the example ports under `examples/`; fixtures come from
 //! `scripts/gen_baseline_fixtures.py` (run against chap-core).

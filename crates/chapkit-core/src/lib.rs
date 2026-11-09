@@ -4,6 +4,7 @@
 //! against [`Model`] can be served over the chapkit HTTP API by the `chapkit`
 //! crate, and called directly, in-process, by explainers and HPO.
 
+pub mod checkpoint;
 mod error;
 mod info;
 mod model;
@@ -13,6 +14,7 @@ mod run;
 pub mod search;
 
 pub use chapkit_dataframe::{self as frame, Column, DType, DataFrame, FrameError, cols};
+pub use checkpoint::{Checkpoint, Provenance, Tensor, TensorData};
 pub use error::{Error, Result};
 pub use info::{AssessedStatus, ModelInfo, ModelMetadata, PeriodType};
 pub use model::{Model, NoConfig, PredictInput, TrainInput};

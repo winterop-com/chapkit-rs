@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use chapkit::{
-    Column, DataFrame, Error, Model, ModelInfo, ModelMetadata, Param, PredictInput, Result,
-    SearchSpace, TrainInput, cols, prediction_frame,
+    Checkpoint, Column, DataFrame, Error, Model, ModelInfo, ModelMetadata, Param, PredictInput,
+    Result, SearchSpace, Tensor, TrainInput, cols, prediction_frame,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -120,6 +120,47 @@ impl Model for RidgeModel {
             },
             ..ModelInfo::default()
         }
+    }
+
+    /// Weights, means and standard deviations go in as tensors; the rest as JSON state.
+    fn save(&self, t: &RidgeTrained) -> Result<Checkpoint> {
+        let state = serde_json::json!({
+            "features": t.features,
+            "location_mean": t.location_mean,
+            "global_mean": t.global_mean,
+            "resid_std": t.resid_std,
+        });
+        Ok(Checkpoint::from_state(&state)?
+            .with_tensor("weights", Tensor::vector(t.weights.clone()))
+            .with_tensor("means", Tensor::vector(t.means.clone()))
+            .with_tensor("stds", Tensor::vector(t.stds.clone())))
+    }
+
+    fn load(&self, ck: &Checkpoint) -> Result<RidgeTrained> {
+        #[derive(Deserialize)]
+        struct State {
+            features: Vec<String>,
+            location_mean: HashMap<String, f64>,
+            global_mean: f64,
+            resid_std: f64,
+        }
+        let s: State = ck.state()?;
+        let t = RidgeTrained {
+            weights: ck.tensor("weights")?.to_f64(),
+            means: ck.tensor("means")?.to_f64(),
+            stds: ck.tensor("stds")?.to_f64(),
+            features: s.features,
+            location_mean: s.location_mean,
+            global_mean: s.global_mean,
+            resid_std: s.resid_std,
+        };
+        let d = t.features.len();
+        if t.weights.len() != d || t.means.len() != d || t.stds.len() != d {
+            return Err(Error::Serde(
+                "checkpoint tensors do not match the feature count".into(),
+            ));
+        }
+        Ok(t)
     }
 
     fn search_space(&self) -> Option<SearchSpace> {

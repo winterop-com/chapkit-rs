@@ -39,11 +39,12 @@ publish = false
 chapkit-dataframe = { path = "crates/chapkit-dataframe" }
 chapkit-core = { path = "crates/chapkit-core" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 schemars = "1"
 rand = { version = "0.9", features = ["small_rng"] }
 rand_distr = "0.5"
+safetensors = "0.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [workspace.lints.rust]

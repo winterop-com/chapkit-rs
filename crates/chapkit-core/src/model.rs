@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{Geo, ModelInfo, Result, RunInfo, SearchSpace};
+use crate::{Checkpoint, Geo, ModelInfo, Result, RunInfo, SearchSpace};
 
 /// Inputs to [`Model::train`].
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +82,23 @@ pub trait Model: Send + Sync + 'static {
     /// by giving each perturbation its own pseudo-location.
     fn locations_independent(&self) -> bool {
         true
+    }
+
+    /// Save trained state as a checkpoint. The default stores it as JSON state;
+    /// override to store weights as tensors. Provenance is filled in by the caller.
+    fn save(&self, trained: &Self::Trained) -> Result<Checkpoint> {
+        Checkpoint::from_state(trained)
+    }
+
+    /// Load trained state from a checkpoint written by [`Model::save`].
+    fn load(&self, checkpoint: &Checkpoint) -> Result<Self::Trained> {
+        checkpoint.state()
+    }
+
+    /// A pre-trained checkpoint shipped with the model, if any. When present, a
+    /// service can skip or shorten training: `$train` starts from these weights.
+    fn pretrained(&self) -> Option<Result<Checkpoint>> {
+        None
     }
 
     /// Fit the model.

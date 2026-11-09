@@ -16,12 +16,15 @@ when a call is a plain function call, not a 2-3 s job round trip.
 
 - `crates/chapkit-dataframe`: columnar `DataFrame` with the chapkit `{columns, data, schema?}` wire format.
 - `crates/chapkit-core`: pure model contract (no IO, no async): `Model` trait, `RunInfo`, `ModelInfo`,
-  `SearchSpace` (chap-core format), `Period`, `prediction_frame`.
-- root package `chapkit`: the crate users depend on; re-exports the above, and will hold the HTTP layer.
-- `examples/<name>/`: example models (`model.rs` + `main.rs`), run with `cargo run --example <name>`.
-  `examples/common/` holds shared example code, pulled in with `#[path]`. Example models are not part of
-  the library.
-- `tests/`, `benches/`: include example models with `#[path]`.
+  `SearchSpace` (chap-core format), `Period`, `prediction_frame`, safetensors `Checkpoint` + `Provenance`.
+- `crates/chapkit-http`: HTTP plumbing with no model knowledge: problem+json errors, job scheduler,
+  health, system, info, API keys, request ids, orchestrator registration, OpenAPI.
+- `crates/chapkit-store`: async `Store` trait and its SQLite backend (rusqlite); no HTTP.
+- root package `chapkit`: the crate users depend on. `Service` turns a `Model` into the full
+  chapkit-compatible API; re-exports the crates above.
+- `examples/<crate>/`: example model crates, each with its own `Cargo.toml` depending on `chapkit` by path,
+  its own tests and benches. `examples/baselines` ports chap-core's baselines (one binary per model);
+  `examples/ridge` is the covariate model for xAI/HPO work. Example models are not part of the library.
 
 ## Workflow
 

@@ -4,7 +4,6 @@
 //!
 //! Included by each example (and by the parity tests) with
 //! `#[path = "../common/empirical.rs"] mod empirical;`.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;

@@ -66,11 +66,14 @@ impl Model for MyModel {
 Ports of chap-core's built-in baselines (`chap_core/models/builtin`), plus a small covariate model:
 
 ```sh
-cargo run --release --example global_median
-cargo run --release --example seasonal_median
-cargo run --release --example seasonal_shift_persistence
-cargo run --release --example ridge
+make examples-release                       # release binaries into ./bin
+bin/global-median                           # serve on 127.0.0.1:8000 (HOST, PORT to change)
+bin/seasonal-median demo                    # run once in-process and time it
+cargo run --release -p ridge                # or straight from cargo
 ```
+
+Each example is its own crate under `examples/`, depending on `chapkit` by path, the way a model
+project would.
 
 ## Development
 

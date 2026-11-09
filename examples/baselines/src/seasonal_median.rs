@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chapkit::{DataFrame, Model, ModelInfo, NoConfig, PredictInput, Result, TrainInput};
 use serde::{Deserialize, Serialize};
 
-use super::empirical::{
+use crate::empirical::{
     GlobalMedianSamples, baseline_info, frame_from_rows, future_rows, median_per_level,
     quantile_samples, series_by_location,
 };

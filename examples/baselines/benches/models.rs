@@ -2,24 +2,11 @@
 use std::hint::black_box;
 
 use chapkit::{Column, DataFrame, Model, NoConfig, PredictInput, RunInfo, TrainInput};
-#[path = "../examples/common/empirical.rs"]
-mod empirical;
-#[path = "../examples/global_median/model.rs"]
-mod global_median;
-#[path = "../examples/ridge/linalg.rs"]
-mod linalg;
-#[path = "../examples/ridge/model.rs"]
-mod ridge;
-#[path = "../examples/seasonal_median/model.rs"]
-mod seasonal_median;
-#[path = "../examples/seasonal_shift_persistence/model.rs"]
-mod seasonal_shift_persistence;
 
+use baselines::GlobalMedian;
+use baselines::SeasonalMedian;
+use baselines::SeasonalShiftPersistence;
 use criterion::{Criterion, criterion_group, criterion_main};
-use global_median::GlobalMedian;
-use ridge::{RidgeConfig, RidgeModel};
-use seasonal_median::SeasonalMedian;
-use seasonal_shift_persistence::SeasonalShiftPersistence;
 
 /// `locs` locations x `periods` monthly periods from 2015-01, plus a future frame of `horizon` periods.
 fn data(locs: usize, periods: usize, horizon: usize) -> (DataFrame, DataFrame) {
@@ -86,7 +73,6 @@ fn benches(c: &mut Criterion) {
         &SeasonalShiftPersistence,
         &NoConfig {},
     );
-    bench_model(c, "ridge", &RidgeModel, &RidgeConfig::default());
 }
 
 criterion_group!(models, benches);

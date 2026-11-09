@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chapkit::{DataFrame, Error, Model, ModelInfo, NoConfig, PredictInput, Result, TrainInput};
 use serde::{Deserialize, Serialize};
 
-use super::empirical::{
+use crate::empirical::{
     baseline_info, frame_from_rows, future_rows, quantile_samples, series_by_location,
 };
 

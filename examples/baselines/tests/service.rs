@@ -7,11 +7,6 @@
 //! The chapkit HTTP contract, end to end and in-process: the exact flow chap-core
 //! runs (config, $train, poll job, $predict, poll job, read artifact), plus error shapes.
 
-#[path = "../examples/common/empirical.rs"]
-mod empirical;
-#[path = "../examples/global_median/model.rs"]
-mod global_median;
-
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -20,16 +15,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn app() -> Router {
-    chapkit::Service::new(
-        "global-median",
-        "Global median",
-        global_median::GlobalMedian,
-    )
-    .database(":memory:")
-    .app()
-    .unwrap()
-    .build()
-    .0
+    chapkit::Service::new("global-median", "Global median", baselines::GlobalMedian)
+        .database(":memory:")
+        .app()
+        .unwrap()
+        .build()
+        .0
 }
 
 async fn call(

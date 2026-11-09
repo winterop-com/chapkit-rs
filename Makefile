@@ -1,6 +1,6 @@
 .PHONY: help check build release examples-release lint fmt test bench examples fixtures doc clean
 
-EXAMPLES := global_median seasonal_median seasonal_shift_persistence ridge
+EXAMPLES := global-median seasonal-median seasonal-shift-persistence ridge
 CHAP_CORE ?= ../chap-core
 
 help:
@@ -29,9 +29,9 @@ release:
 	@cargo build --workspace --release
 
 examples-release:
-	@cargo build --release --examples
+	@cargo build --release -p baselines -p ridge
 	@mkdir -p bin
-	@for e in $(EXAMPLES); do cp target/release/examples/$$e bin/$$e; done
+	@for e in $(EXAMPLES); do cp target/release/$$e bin/$$e; done
 	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
 
 lint:
@@ -50,7 +50,7 @@ bench:
 	@cargo bench --workspace -- $(BENCH)
 
 examples:
-	@for e in $(EXAMPLES); do cargo run -q --release --example $$e -- demo || exit 1; echo; done
+	@for e in $(EXAMPLES); do cargo run -q --release --bin $$e -- demo || exit 1; echo; done
 
 fixtures:
 	@$(CHAP_CORE)/.venv/bin/python scripts/gen_baseline_fixtures.py

@@ -10,7 +10,7 @@ use rand_distr::{Distribution, Normal};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::linalg::{mean_std, solve};
+use crate::linalg::{mean_std, solve};
 
 /// Ridge regression of the target on covariates, around a per-location mean,
 /// with normal residual noise. Small, fast and covariate-driven, which makes it

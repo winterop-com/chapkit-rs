@@ -7,18 +7,10 @@
 use std::collections::HashMap;
 
 use chapkit::{DataFrame, Model, NoConfig, Period, PredictInput, RunInfo, TrainInput, cols};
-#[path = "../examples/common/empirical.rs"]
-mod empirical;
-#[path = "../examples/global_median/model.rs"]
-mod global_median;
-#[path = "../examples/seasonal_median/model.rs"]
-mod seasonal_median;
-#[path = "../examples/seasonal_shift_persistence/model.rs"]
-mod seasonal_shift_persistence;
 
-use global_median::GlobalMedian;
-use seasonal_median::SeasonalMedian;
-use seasonal_shift_persistence::SeasonalShiftPersistence;
+use baselines::GlobalMedian;
+use baselines::SeasonalMedian;
+use baselines::SeasonalShiftPersistence;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -104,8 +96,8 @@ fn seasonal_shift_persistence_matches_chap_core() {
 #[test]
 fn quantile_levels_match_chap_core() {
     // Sampling [0, 1] returns the levels themselves.
-    let l = empirical::quantile_samples(&[0.0, 1.0]).unwrap();
-    assert_eq!(l.len(), empirical::N_SAMPLES);
+    let l = baselines::empirical::quantile_samples(&[0.0, 1.0]).unwrap();
+    assert_eq!(l.len(), baselines::empirical::N_SAMPLES);
     assert!((l[0] - 0.5 / 99.0).abs() < 1e-15);
     assert_eq!(l[49], 0.5);
     assert_eq!(l[50], 0.5);
@@ -115,22 +107,22 @@ fn quantile_levels_match_chap_core() {
 #[test]
 fn quantile_samples_edge_cases() {
     assert_eq!(
-        empirical::quantile_samples(&[3.0]).unwrap(),
-        vec![3.0; empirical::N_SAMPLES]
+        baselines::empirical::quantile_samples(&[3.0]).unwrap(),
+        vec![3.0; baselines::empirical::N_SAMPLES]
     );
-    assert!(empirical::quantile_samples(&[]).is_err());
+    assert!(baselines::empirical::quantile_samples(&[]).is_err());
 }
 
 #[test]
 fn median_per_level_even_and_odd() {
     let (a, b, c) = (vec![1.0, 10.0], vec![3.0, 20.0], vec![2.0, 30.0]);
     assert_eq!(
-        empirical::median_per_level([&a, &b]).unwrap(),
+        baselines::empirical::median_per_level([&a, &b]).unwrap(),
         vec![2.0, 15.0]
     );
     assert_eq!(
-        empirical::median_per_level([&a, &b, &c]).unwrap(),
+        baselines::empirical::median_per_level([&a, &b, &c]).unwrap(),
         vec![2.0, 20.0]
     );
-    assert!(empirical::median_per_level([&a, &vec![1.0]]).is_none());
+    assert!(baselines::empirical::median_per_level([&a, &vec![1.0]]).is_none());
 }

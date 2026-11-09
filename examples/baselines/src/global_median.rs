@@ -1,6 +1,6 @@
 use chapkit::{DataFrame, Model, ModelInfo, NoConfig, PredictInput, Result, TrainInput, cols};
 
-use super::empirical::{GlobalMedianSamples, baseline_info, frame_from_rows};
+use crate::empirical::{GlobalMedianSamples, baseline_info, frame_from_rows};
 
 /// Forecasts every period with all observations of the same location in the
 /// training data. Port of chap-core `global_median` (version 2).

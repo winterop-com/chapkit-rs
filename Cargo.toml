@@ -22,29 +22,12 @@ tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 
-[dev-dependencies]
-serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
-tokio.workspace = true
-tower.workspace = true
-ulid.workspace = true
-axum.workspace = true
-http-body-util.workspace = true
-rand.workspace = true
-rand_distr.workspace = true
-criterion.workspace = true
-
-[[bench]]
-name = "models"
-harness = false
-
 [lints]
 workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples/*"]
 
 [workspace.package]
 version = "0.1.0"

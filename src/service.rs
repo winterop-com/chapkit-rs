@@ -13,6 +13,9 @@ use crate::erased::{DynModel, Erased};
 use crate::routes;
 use crate::state::AppState;
 
+/// The Python chapkit release whose HTTP API chapkit-rs matches.
+pub const CHAPKIT_API_VERSION: &str = "2.6.0";
+
 /// Builder for an ML service. Mirrors Python chapkit's `MLServiceBuilder`: one model,
 /// configs, artifacts, jobs, health, system, info, and the ML endpoints.
 pub struct Service {
@@ -113,7 +116,10 @@ impl Service {
             "target": m.target,
             "hpo_search_space": self.model.search_space(),
             "git_revision": std::env::var("GIT_REVISION").ok().filter(|s| !s.is_empty()),
-            "chapkit_version": format!("chapkit-rs {}", env!("CARGO_PKG_VERSION")),
+            // The Python chapkit API version this service is compatible with, with
+            // chapkit-rs as semver build metadata, so version checks in chap tooling parse it.
+            "chapkit_version": format!("{CHAPKIT_API_VERSION}+chapkit-rs.{}", env!("CARGO_PKG_VERSION")),
+            "chapkit_rs_version": env!("CARGO_PKG_VERSION"),
             "servicekit_version": null,
             "extensions": ["$predict-sync", "$explain"],
         })

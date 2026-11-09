@@ -293,6 +293,41 @@ async fn chap_core_flow() {
     assert_eq!(ex["importances"][0]["weight"], 0.0);
     assert!(ex["elapsed_ms"].as_f64().unwrap() >= 0.0);
 
+    // Sample data generator, as cdx and the console use it.
+    let (s, sample, _) = call(
+        &app,
+        "GET",
+        "/api/v1/ml/$generate-sample-data?num_locations=2&num_periods=6&seed=1",
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{sample}");
+    assert_eq!(sample["data"]["columns"][2], "disease_cases");
+    assert_eq!(sample["data"]["data"].as_array().unwrap().len(), 12);
+    let (_, sample2, _) = call(
+        &app,
+        "GET",
+        "/api/v1/ml/$generate-sample-data?num_locations=2&num_periods=6&seed=1",
+        None,
+    )
+    .await;
+    assert_eq!(sample, sample2, "same seed, same data");
+    let (_, pred, _) = call(
+        &app,
+        "GET",
+        "/api/v1/ml/$generate-sample-data?kind=predict&num_periods=4&include_geo=true",
+        None,
+    )
+    .await;
+    assert_eq!(pred["future"]["data"].as_array().unwrap().len(), 4 * 5);
+    assert_eq!(pred["geo"]["type"], "FeatureCollection");
+    assert!(
+        info["chapkit_version"]
+            .as_str()
+            .unwrap()
+            .starts_with("2.6.0+chapkit-rs.")
+    );
+
     let (_, tree, _) = call(
         &app,
         "GET",

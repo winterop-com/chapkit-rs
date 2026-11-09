@@ -21,7 +21,7 @@ pub use chapkit_http as http;
 pub use chapkit_store as store;
 pub use chapkit_xai as xai;
 pub use erased::{DynModel, Erased, RESERVED_KEYS, Trained};
-pub use service::Service;
+pub use service::{CHAPKIT_API_VERSION, Service};
 
 /// Compiles the README's code blocks as doctests, so the example there cannot rot.
 #[doc = include_str!("../README.md")]

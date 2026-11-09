@@ -5,11 +5,11 @@
 //! change in prediction per standard deviation of that feature.
 
 use crate::linalg::weighted_least_squares;
-use crate::rng::SplitMix;
 use crate::{
     Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn, eval_batch,
     feature_stats,
 };
+use chapkit_core::rng::Rng;
 
 pub(crate) fn explain(
     f: &dyn ValueFn,
@@ -25,7 +25,7 @@ pub(crate) fn explain(
         .unwrap_or((k as f64).sqrt() * 0.75)
         .max(1e-6);
     let n = opts.n_samples.max(k + 1);
-    let mut rng = SplitMix::new(opts.seed);
+    let mut rng = Rng::new(opts.seed);
 
     // Row 0 is the instance itself (weight 1); the rest are perturbations.
     let inst_z: Vec<f64> = (0..k).map(|j| (instance[j] - mu[j]) / sigma[j]).collect();

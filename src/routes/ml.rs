@@ -195,6 +195,112 @@ async fn explain(
     }))
 }
 
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+struct SampleParams {
+    /// `train` (default) or `predict`.
+    kind: Option<String>,
+    /// Include this config's `additional_continuous_covariates`.
+    config_id: Option<String>,
+    num_locations: Option<usize>,
+    num_periods: Option<usize>,
+    num_features: Option<usize>,
+    /// `monthly` or `weekly` (default: the model's period type, else monthly).
+    period_type: Option<String>,
+    /// `polygon` (default) or `point`.
+    geo_type: Option<String>,
+    /// Default: whether the model requires geo.
+    include_geo: Option<bool>,
+    /// Negative (default) for fresh data each call.
+    seed: Option<i64>,
+}
+
+/// A ready-to-submit sample `$train` or `$predict` payload from the synthetic data
+/// generator (same columns and options as Python chapkit's).
+#[utoipa::path(get, path = "/$generate-sample-data", tag = "ML", params(SampleParams),
+    responses((status = OK, body = Object), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn generate_sample_data(
+    State(s): State<AppState>,
+    chapkit_http::Query(p): chapkit_http::Query<SampleParams>,
+) -> ApiResult<axum::Json<serde_json::Value>> {
+    use chapkit_core::synth::{Generator, Resolution, Spec};
+    let info = s.model().info();
+    let mut config_covariates = Vec::new();
+    if let Some(cid) = &p.config_id {
+        parse_ulid(cid).map_err(|_| Problem::bad_request(format!("Invalid config_id: '{cid}'")))?;
+        let cfg = s
+            .store()
+            .get_config(cid)
+            .await
+            .map_err(crate::state::store_problem)?
+            .ok_or_else(|| Problem::not_found(format!("Config {cid} not found")))?;
+        config_covariates = cfg
+            .data
+            .get("additional_continuous_covariates")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    let resolution = match p.period_type.as_deref() {
+        Some("weekly") => Resolution::Weekly,
+        Some("monthly") => Resolution::Monthly,
+        Some(other) => {
+            return Err(Problem::bad_request(format!(
+                "period_type must be 'monthly' or 'weekly', got '{other}'"
+            )));
+        }
+        None if info.period_type == chapkit_core::PeriodType::Weekly => Resolution::Weekly,
+        None => Resolution::Monthly,
+    };
+    let num_periods = p.num_periods.unwrap_or(50).clamp(1, 10_000);
+    let mut spec = Spec {
+        num_locations: p.num_locations.unwrap_or(5).clamp(1, 10_000),
+        num_periods,
+        num_features: p.num_features.unwrap_or(3).min(100),
+        required_covariates: info.required_covariates.clone(),
+        additional_covariates: config_covariates,
+        resolution,
+        start_year: 2020,
+    };
+    let seed = p.seed.filter(|s| *s >= 0).map(i64::cast_unsigned);
+    let mut generator = Generator::new(seed);
+    let want_geo = p.include_geo.unwrap_or(info.requires_geo);
+    let geo = want_geo
+        .then(|| Generator::geo(spec.num_locations, p.geo_type.as_deref() == Some("point")));
+    let gen_err = |e: chapkit_core::Error| Problem::bad_request(e.to_string());
+    let mut payload = match p.kind.as_deref().unwrap_or("train") {
+        "predict" => {
+            let lower = info.min_prediction_periods.max(1) as usize;
+            let upper = (info.max_prediction_periods as usize).max(lower);
+            spec.num_periods = num_periods.clamp(lower, upper);
+            let (historic, future) = generator
+                .prediction_data(&spec, num_periods)
+                .map_err(gen_err)?;
+            serde_json::json!({"historic": historic, "future": future})
+        }
+        "train" => {
+            let data = generator.training_data(&spec).map_err(gen_err)?;
+            let mut v = serde_json::json!({"data": data});
+            if let Some(cid) = &p.config_id {
+                v["config_id"] = serde_json::json!(cid);
+            }
+            v
+        }
+        other => {
+            return Err(Problem::bad_request(format!(
+                "kind must be 'train' or 'predict', got '{other}'"
+            )));
+        }
+    };
+    if let Some(g) = geo {
+        payload["geo"] = g;
+    }
+    Ok(axum::Json(payload))
+}
+
 fn diag(severity: &str, code: &str, message: impl Into<String>, field: Option<&str>) -> Diagnostic {
     Diagnostic {
         severity: severity.into(),
@@ -314,6 +420,7 @@ pub fn router(state: AppState) -> OpenApiRouter {
         .routes(routes!(predict))
         .routes(routes!(predict_sync))
         .routes(routes!(explain))
+        .routes(routes!(generate_sample_data))
         .routes(routes!(validate))
         .with_state(state)
 }

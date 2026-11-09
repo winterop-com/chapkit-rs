@@ -10,11 +10,11 @@
 use std::collections::BTreeMap;
 
 use crate::linalg::weighted_least_squares;
-use crate::rng::SplitMix;
 use crate::{
     Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn, eval_batch,
     feature_stats,
 };
+use chapkit_core::rng::Rng;
 
 const EXHAUSTIVE_MAX_FEATURES: usize = 12;
 
@@ -98,7 +98,7 @@ fn coalitions(k: usize, n_samples: usize, seed: u64) -> Vec<(Vec<bool>, f64)> {
 fn sample_coalitions(k: usize, target: usize, seed: u64) -> Vec<(Vec<bool>, f64)> {
     let size_w: Vec<f64> = (1..k).map(|s| 1.0 / (s as f64 * (k - s) as f64)).collect();
     let total_w: f64 = size_w.iter().sum();
-    let mut rng = SplitMix::new(seed);
+    let mut rng = Rng::new(seed);
     let mut counts: BTreeMap<Vec<bool>, f64> = BTreeMap::new();
     for _ in 0..target {
         let mut t = rng.unit() * total_w;

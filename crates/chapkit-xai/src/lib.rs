@@ -12,7 +12,7 @@
 pub mod forecast;
 mod lime;
 mod linalg;
-mod rng;
+
 mod shap;
 
 use rayon::prelude::*;
@@ -192,7 +192,7 @@ mod tests {
     }
 
     fn background() -> Vec<Vec<f64>> {
-        let mut r = rng::SplitMix::new(3);
+        let mut r = chapkit_core::rng::Rng::new(3);
         (0..200)
             .map(|_| vec![r.normal() * 2.0 + 1.0, r.normal() + 5.0, r.normal() * 0.5])
             .collect()

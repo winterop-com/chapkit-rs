@@ -1,0 +1,5 @@
+# Panicking shortcuts are denied in library code (see [workspace.lints.clippy]);
+# tests may use them, since a panic is how a test fails.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

@@ -1,0 +1,71 @@
+[package]
+name = "chapkit"
+description = "In-process ML services for Chap, wire-compatible with Python chapkit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+chapkit-core.workspace = true
+chapkit-dataframe.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "models"
+harness = false
+
+[lints]
+workspace = true
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Morten Hansen <morten@winterop.com>"]
+publish = false
+
+[workspace.dependencies]
+chapkit-dataframe = { path = "crates/chapkit-dataframe" }
+chapkit-core = { path = "crates/chapkit-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+schemars = "1"
+rand = { version = "0.9", features = ["small_rng"] }
+rand_distr = "0.5"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+doc_markdown = "allow"
+
+[profile.bench]
+debug = true

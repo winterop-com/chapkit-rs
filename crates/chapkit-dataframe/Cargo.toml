@@ -1,0 +1,22 @@
+[package]
+name = "chapkit-dataframe"
+description = "Lightweight columnar DataFrame with the chapkit {columns, data} JSON wire format"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "codec"
+harness = false
+
+[lints]
+workspace = true

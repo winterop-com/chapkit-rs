@@ -1,4 +1,4 @@
-.PHONY: help check build release lint fmt test bench doc clean
+.PHONY: help check build release lint fmt test bench doc compare-openapi clean
 
 
 help:
@@ -13,6 +13,7 @@ help:
 	@echo "  test      Run all tests"
 	@echo "  bench     Run criterion benchmarks (BENCH=<filter> to narrow)"
 	@echo "  doc       Build API docs"
+	@echo "  compare-openapi PY=<url> RS=<url>  Diff a Python chapkit service's OpenAPI against a chapkit-rs one"
 	@echo "  clean     Remove build output"
 
 check: lint test
@@ -40,6 +41,9 @@ bench:
 
 doc:
 	@cargo doc --workspace --no-deps
+
+compare-openapi:
+	@python3 scripts/compare_openapi.py $(PY) $(RS)
 
 clean:
 	@cargo clean

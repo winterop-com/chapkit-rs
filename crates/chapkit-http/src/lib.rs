@@ -15,7 +15,7 @@ mod system;
 pub mod time;
 
 pub use app::{App, init_tracing};
-pub use extract::{Json, PageParams, Paginated, Query, Stats, parse_ulid};
+pub use extract::{Json, ListOrPage, PageParams, Paginated, Query, Stats, parse_ulid};
 pub use health::{CheckResult, HealthState};
 pub use jobs::{JobError, JobRecord, JobStatus, Scheduler};
 pub use problem::{ApiResult, Problem};

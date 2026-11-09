@@ -123,6 +123,33 @@ impl<T> Paginated<T> {
     }
 }
 
+/// A list response: a plain array, or a [`Paginated`] page when both `page` and `size`
+/// are given. Used for OpenAPI documentation of list endpoints.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum ListOrPage<T> {
+    /// No pagination requested.
+    List(Vec<T>),
+    /// A page.
+    Page(Paginated<T>),
+}
+
+impl<T: Serialize> axum::response::IntoResponse for ListOrPage<T> {
+    fn into_response(self) -> axum::response::Response {
+        axum::Json(self).into_response()
+    }
+}
+
+impl<T> ListOrPage<T> {
+    /// A list, or a page when `paging` is `Some((page, size))`.
+    pub fn new(items: Vec<T>, total: u64, paging: Option<(u32, u32)>) -> Self {
+        match paging {
+            Some((page, size)) => ListOrPage::Page(Paginated::new(items, total, page, size)),
+            None => ListOrPage::List(items),
+        }
+    }
+}
+
 /// `{"total": n}` for `$stats` endpoints.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct Stats {

@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chapkit_http::time::entity_now;
-use chapkit_http::{ApiResult, Json, PageParams, Paginated, Problem, Query, Stats, parse_ulid};
+use chapkit_http::{ApiResult, Json, ListOrPage, PageParams, Problem, Query, Stats, parse_ulid};
 use chapkit_store::{NewArtifact, Page};
 use serde_json::Value;
 use utoipa_axum::router::OpenApiRouter;
@@ -47,8 +47,11 @@ fn node(a: ArtifactOut, children: Option<Vec<ArtifactTreeNode>>) -> ArtifactTree
 
 /// List artifact summaries (`data` without `content`).
 #[utoipa::path(get, path = "", tag = "Artifacts", params(PageParams),
-    responses((status = OK, body = Vec<ArtifactOut>)))]
-async fn list(State(s): State<AppState>, Query(p): Query<PageParams>) -> ApiResult<Response> {
+    responses((status = OK, body = ListOrPage<ArtifactOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
+async fn list(
+    State(s): State<AppState>,
+    Query(p): Query<PageParams>,
+) -> ApiResult<ListOrPage<ArtifactOut>> {
     let paging = p.resolve()?;
     let page = paging.map(|(page, size)| Page {
         offset: u64::from((page - 1) * size),
@@ -66,10 +69,7 @@ async fn list(State(s): State<AppState>, Query(p): Query<PageParams>) -> ApiResu
             ..r.into()
         })
         .collect();
-    Ok(match paging {
-        Some((page, size)) => axum::Json(Paginated::new(items, total, page, size)).into_response(),
-        None => axum::Json(items).into_response(),
-    })
+    Ok(ListOrPage::new(items, total, paging))
 }
 
 /// Create an artifact. The level is the parent's level + 1.

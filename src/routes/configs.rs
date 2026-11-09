@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chapkit_http::time::entity_now;
-use chapkit_http::{ApiResult, Json, PageParams, Paginated, Problem, Query, Stats, parse_ulid};
+use chapkit_http::{ApiResult, Json, ListOrPage, PageParams, Problem, Query, Stats, parse_ulid};
 use chapkit_store::{ConfigRow, Page};
 use serde_json::Value;
 use utoipa_axum::router::OpenApiRouter;
@@ -34,8 +34,11 @@ fn normalized(state: &AppState, body: &ConfigIn) -> ApiResult<Value> {
 
 /// List configs (paged when both `page` and `size` are given).
 #[utoipa::path(get, path = "", tag = "Config", params(PageParams),
-    responses((status = OK, body = Vec<ConfigOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
-async fn list(State(s): State<AppState>, Query(p): Query<PageParams>) -> ApiResult<Response> {
+    responses((status = OK, body = ListOrPage<ConfigOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
+async fn list(
+    State(s): State<AppState>,
+    Query(p): Query<PageParams>,
+) -> ApiResult<ListOrPage<ConfigOut>> {
     let paging = p.resolve()?;
     let page = paging.map(|(page, size)| Page {
         offset: u64::from((page - 1) * size),
@@ -43,10 +46,7 @@ async fn list(State(s): State<AppState>, Query(p): Query<PageParams>) -> ApiResu
     });
     let (rows, total) = s.store().list_configs(page).await.map_err(store_problem)?;
     let items: Vec<ConfigOut> = rows.into_iter().map(Into::into).collect();
-    Ok(match paging {
-        Some((page, size)) => axum::Json(Paginated::new(items, total, page, size)).into_response(),
-        None => axum::Json(items).into_response(),
-    })
+    Ok(ListOrPage::new(items, total, paging))
 }
 
 /// Create a config. Defaults are filled; keys you send come back unchanged.

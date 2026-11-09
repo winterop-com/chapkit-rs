@@ -39,6 +39,23 @@ async fn system() -> axum::Json<SystemInfo> {
     })
 }
 
+/// Bundled static web apps. chapkit-rs serves none; kept for API compatibility.
+#[utoipa::path(get, path = "/api/v1/system/apps", tag = "Service", responses((status = OK, body = Vec<Object>)))]
+async fn apps() -> axum::Json<Vec<Value>> {
+    axum::Json(Vec::new())
+}
+
+/// JSON schema of the app list.
+#[utoipa::path(get, path = "/api/v1/system/apps/$schema", tag = "Service", responses((status = OK, body = Object)))]
+async fn apps_schema() -> axum::Json<Value> {
+    axum::Json(
+        serde_json::json!({"type": "array", "items": {"type": "object", "properties": {
+        "name": {"type": "string"}, "version": {"type": "string"}, "prefix": {"type": "string"},
+        "description": {"type": ["string", "null"]}, "author": {"type": ["string", "null"]},
+        "entry": {"type": "string"}, "is_package": {"type": "boolean"}}}}),
+    )
+}
+
 /// Service information (the service's `ServiceInfo` / `MLServiceInfo` JSON).
 #[utoipa::path(get, path = "/api/v1/info", tag = "Service", responses((status = OK, body = Object)))]
 async fn info(State(info): State<Value>) -> axum::Json<Value> {
@@ -47,9 +64,13 @@ async fn info(State(info): State<Value>) -> axum::Json<Value> {
 
 /// System and info routes.
 pub fn router(service_info: Value) -> OpenApiRouter {
-    OpenApiRouter::new().routes(routes!(system)).merge(
-        OpenApiRouter::new()
-            .routes(routes!(info))
-            .with_state(service_info),
-    )
+    OpenApiRouter::new()
+        .routes(routes!(system))
+        .routes(routes!(apps))
+        .routes(routes!(apps_schema))
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(info))
+                .with_state(service_info),
+        )
 }

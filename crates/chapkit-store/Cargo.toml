@@ -1,0 +1,18 @@
+[package]
+name = "chapkit-store"
+description = "Persistence for chapkit-rs: configs, artifacts and their links behind an async Store trait (SQLite backend)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

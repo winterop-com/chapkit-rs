@@ -1,6 +1,7 @@
-//! chap-core's `seasonal_shift_persistence` baseline, ported to Rust.
+//! chap-core's `seasonal_shift_persistence` baseline, ported to Rust and served as a chapkit-compatible service.
 //!
-//! cargo run --release --example seasonal_shift_persistence
+//!     cargo run --release --example seasonal_shift_persistence            # serve on HOST:PORT (127.0.0.1:8000)
+//!     cargo run --release --example seasonal_shift_persistence -- demo    # run once in-process and time it
 
 #[path = "../common/demo.rs"]
 mod demo;
@@ -8,10 +9,22 @@ mod demo;
 mod empirical;
 mod model;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    demo::run(
-        "seasonal_shift_persistence",
-        &model::SeasonalShiftPersistence,
-        &chapkit::NoConfig {},
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("demo") {
+        return demo::run(
+            "seasonal_shift_persistence",
+            &model::SeasonalShiftPersistence,
+            &chapkit::NoConfig {},
+        );
+    }
+    chapkit::Service::new(
+        "seasonal-shift-persistence",
+        "Seasonal shift persistence",
+        model::SeasonalShiftPersistence,
     )
+    .description("Rust port of chap-core's seasonal_shift_persistence baseline")
+    .serve()
+    .await?;
+    Ok(())
 }

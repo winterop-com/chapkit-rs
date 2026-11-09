@@ -270,9 +270,28 @@ async fn chap_core_flow() {
     );
 
     // Fast path: same forecast, returned directly.
-    let (s, frame, _) = call(&app, "POST", "/api/v1/ml/$predict-sync", Some(predict_body)).await;
+    let (s, frame, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$predict-sync",
+        Some(predict_body.clone()),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{frame}");
     assert_eq!(frame["data"], content["data"]);
+
+    // Explain one forecast cell. The mean model ignores rainfall, so its importance is zero.
+    let mut explain_body = predict_body.clone();
+    explain_body["location"] = json!("A");
+    explain_body["time_period"] = json!("2025-01");
+    explain_body["method"] = json!("shap");
+    let (s, ex, _) = call(&app, "POST", "/api/v1/ml/$explain", Some(explain_body)).await;
+    assert_eq!(s, StatusCode::OK, "{ex}");
+    assert_eq!(ex["method"], "shap");
+    assert_eq!(ex["prediction"], 10.0);
+    assert_eq!(ex["features"], json!(["rainfall"]));
+    assert_eq!(ex["importances"][0]["weight"], 0.0);
+    assert!(ex["elapsed_ms"].as_f64().unwrap() >= 0.0);
 
     let (_, tree, _) = call(
         &app,

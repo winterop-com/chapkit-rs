@@ -10,7 +10,8 @@ use utoipa_axum::routes;
 use crate::ml;
 use crate::state::AppState;
 use crate::wire::{
-    Diagnostic, JobSubmitted, PredictRequest, TrainRequest, ValidateRequest, ValidateResponse,
+    Diagnostic, ExplainRequest, ExplainResponse, JobSubmitted, PredictRequest, TrainRequest,
+    ValidateRequest, ValidateResponse,
 };
 
 fn ulid_field(field: &str, raw: &str) -> ApiResult<String> {
@@ -119,6 +120,79 @@ async fn predict_sync(
         }
     })?;
     Ok(axum::Json(frame))
+}
+
+/// Explain one forecast cell with LIME or KernelSHAP, computed in-process: every
+/// perturbation is a direct model call, run in parallel across cores.
+/// chapkit-rs extension; not part of Python chapkit.
+#[utoipa::path(post, path = "/$explain", tag = "ML", request_body = ExplainRequest,
+    responses((status = OK, body = ExplainResponse), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn explain(
+    State(s): State<AppState>,
+    Json(req): Json<ExplainRequest>,
+) -> ApiResult<axum::Json<ExplainResponse>> {
+    let artifact_id = ulid_field("artifact_id", &req.artifact_id)?;
+    let _permit = s
+        .inner
+        .sync_permits
+        .acquire()
+        .await
+        .map_err(|_| Problem::internal())?;
+    let job_problem = |e: chapkit_http::JobError| {
+        if e.message.contains("not found") {
+            Problem::not_found(e.message)
+        } else {
+            Problem::bad_request(format!("{}: {}", e.kind, e.message))
+        }
+    };
+    let (trained, config, _) = ml::load_trained(&s, &artifact_id)
+        .await
+        .map_err(job_problem)?;
+    let run = ml::resolve_run(&s, req.run_info.as_ref(), &config, Some(&req.future))
+        .map_err(job_problem)?;
+    let model = s.model().clone();
+    let target_col = model.info().target;
+    let opts = chapkit_xai::Options {
+        method: req.method,
+        n_samples: req.n_samples.unwrap_or(500).clamp(1, 100_000),
+        seed: req.seed.unwrap_or(0),
+        kernel_width: req.kernel_width,
+    };
+    let target = chapkit_xai::ForecastTarget {
+        location: req.location,
+        time_period: req.time_period,
+    };
+    let start = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
+        let predict = |future: &DataFrame| {
+            model
+                .predict(
+                    &trained,
+                    &config,
+                    chapkit_core::PredictInput::new(&req.historic, future, &run, None),
+                )
+                .map_err(|e| e.to_string())
+        };
+        chapkit_xai::explain_forecast(
+            &predict,
+            &req.historic,
+            &req.future,
+            &target,
+            req.features,
+            &target_col,
+            &opts,
+        )
+    })
+    .await
+    .map_err(|_| Problem::internal())?;
+    let explanation = result.map_err(|e| match e {
+        chapkit_xai::Error::InvalidInput(m) => Problem::bad_request(m),
+        other => Problem::bad_request(other.to_string()),
+    })?;
+    Ok(axum::Json(ExplainResponse {
+        explanation,
+        elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+    }))
 }
 
 fn diag(severity: &str, code: &str, message: impl Into<String>, field: Option<&str>) -> Diagnostic {
@@ -239,6 +313,7 @@ pub fn router(state: AppState) -> OpenApiRouter {
         .routes(routes!(train))
         .routes(routes!(predict))
         .routes(routes!(predict_sync))
+        .routes(routes!(explain))
         .routes(routes!(validate))
         .with_state(state)
 }

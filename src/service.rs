@@ -115,7 +115,7 @@ impl Service {
             "git_revision": std::env::var("GIT_REVISION").ok().filter(|s| !s.is_empty()),
             "chapkit_version": format!("chapkit-rs {}", env!("CARGO_PKG_VERSION")),
             "servicekit_version": null,
-            "extensions": ["$predict-sync"],
+            "extensions": ["$predict-sync", "$explain"],
         })
     }
 

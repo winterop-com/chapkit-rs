@@ -138,6 +138,41 @@ pub struct PredictRequest {
     pub run_info: Option<RunInfoIn>,
 }
 
+/// `POST /api/v1/ml/$explain`: explain one forecast cell of a trained model.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ExplainRequest {
+    pub artifact_id: String,
+    #[schema(value_type = Object)]
+    pub historic: DataFrame,
+    #[schema(value_type = Object)]
+    pub future: DataFrame,
+    pub run_info: Option<RunInfoIn>,
+    /// Location of the cell to explain.
+    pub location: String,
+    /// Period of the cell to explain.
+    pub time_period: String,
+    /// Covariates to explain (default: every numeric covariate in `future`).
+    pub features: Option<Vec<String>>,
+    /// `lime` (default) or `shap`.
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub method: chapkit_xai::Method,
+    /// Perturbations (LIME) or sampled coalitions (SHAP above 12 features). Default 500.
+    pub n_samples: Option<usize>,
+    pub seed: Option<u64>,
+    pub kernel_width: Option<f64>,
+}
+
+/// `$explain` result.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ExplainResponse {
+    #[serde(flatten)]
+    #[schema(value_type = Object)]
+    pub explanation: chapkit_xai::ForecastExplanation,
+    /// Wall time of the explanation, all model calls included.
+    pub elapsed_ms: f64,
+}
+
 /// 202 response of `$train` and `$predict`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct JobSubmitted {

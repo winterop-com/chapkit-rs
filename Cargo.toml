@@ -11,6 +11,7 @@ chapkit-core.workspace = true
 chapkit-dataframe.workspace = true
 chapkit-http.workspace = true
 chapkit-store.workspace = true
+chapkit-xai.workspace = true
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -70,6 +71,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 http-body-util = "0.1"
 lru = "0.16"
+rayon = "1"
+chapkit-xai = { path = "crates/chapkit-xai" }
 async-trait = "0.1"
 gethostname = "1"
 chapkit-http = { path = "crates/chapkit-http" }
@@ -97,6 +100,7 @@ must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 doc_markdown = "allow"
 result_large_err = "allow"
+many_single_char_names = "allow"
 
 [profile.bench]
 debug = true

@@ -1,0 +1,19 @@
+[package]
+name = "chapkit-xai"
+description = "In-process explainers for chapkit-rs models: LIME and KernelSHAP over forecasts"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+chapkit-core.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

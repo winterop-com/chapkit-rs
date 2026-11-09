@@ -19,6 +19,7 @@ pub use chapkit_core::*;
 pub use chapkit_dataframe as dataframe;
 pub use chapkit_http as http;
 pub use chapkit_store as store;
+pub use chapkit_xai as xai;
 pub use erased::{DynModel, Erased, RESERVED_KEYS, Trained};
 pub use service::Service;
 

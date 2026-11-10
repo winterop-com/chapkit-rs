@@ -137,7 +137,8 @@ pub trait Store: Send + Sync + 'static {
 /// Open a store from a database URL.
 ///
 /// - SQLite (rusqlite): `:memory:`, a file path, `sqlite:///path`, `sqlite://path`, chapkit's
-///   `sqlite+aiosqlite:///path`. `None` or empty means in-memory SQLite.
+///   `sqlite+aiosqlite:///path`. `None`, empty, `sqlite://` and sqlx's `sqlite::memory:` mean
+///   in-memory SQLite; any other `scheme://` URL is an error.
 /// - turso (feature `turso`): `turso::memory:`, `turso:///path`, `turso://path`.
 ///
 /// As in SQLAlchemy (and so Python chapkit), `sqlite:///data/x.db` is relative to the working
@@ -169,19 +170,77 @@ async fn open_turso(_: &str) -> StoreResult<std::sync::Arc<dyn Store>> {
 
 /// Open a SQLite store from a database URL (see [`open`]).
 pub fn open_sqlite(url: Option<&str>) -> StoreResult<SqliteStore> {
-    match url.map(str::trim).filter(|u| !u.is_empty()) {
-        None | Some(":memory:") => SqliteStore::in_memory(),
-        Some(u) => {
-            let path = u
-                .strip_prefix("sqlite+aiosqlite:///")
-                .or_else(|| u.strip_prefix("sqlite:///"))
-                .or_else(|| u.strip_prefix("sqlite://"))
-                .unwrap_or(u);
-            if path == ":memory:" {
-                SqliteStore::in_memory()
-            } else {
-                SqliteStore::open(path)
-            }
+    match sqlite_path(url)? {
+        None => SqliteStore::in_memory(),
+        Some(path) => SqliteStore::open(path),
+    }
+}
+
+/// The file a SQLite URL names, or `None` for an in-memory database. Besides `:memory:` and an
+/// empty URL, the in-memory spellings of SQLAlchemy (`sqlite://`, `sqlite:///:memory:`) and sqlx
+/// (`sqlite::memory:`, `sqlite:`) are understood, so none of them creates a file named after the
+/// URL. Any other `scheme://` URL is an error.
+fn sqlite_path(url: Option<&str>) -> StoreResult<Option<&str>> {
+    let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) else {
+        return Ok(None);
+    };
+    let path = u
+        .strip_prefix("sqlite+aiosqlite:///")
+        .or_else(|| u.strip_prefix("sqlite+aiosqlite://"))
+        .or_else(|| u.strip_prefix("sqlite:///"))
+        .or_else(|| u.strip_prefix("sqlite://"))
+        .or_else(|| u.strip_prefix("sqlite:"));
+    let path = match path {
+        Some(p) => p,
+        None if u.contains("://") => {
+            return Err(StoreError::Invalid(format!(
+                "{u}: not a SQLite URL (sqlite:///path, :memory:, or a file path)"
+            )));
         }
+        None => u,
+    };
+    Ok(match path {
+        "" | ":memory:" => None,
+        p => Some(p),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_path;
+
+    #[test]
+    fn in_memory_spellings_never_name_a_file() {
+        for url in [
+            "",
+            "  ",
+            ":memory:",
+            "sqlite::memory:",
+            "sqlite:",
+            "sqlite://",
+            "sqlite:///:memory:",
+            "sqlite+aiosqlite:///:memory:",
+        ] {
+            assert_eq!(sqlite_path(Some(url)).ok().flatten(), None, "{url:?}");
+        }
+        assert_eq!(sqlite_path(None).ok().flatten(), None);
+    }
+
+    #[test]
+    fn file_urls_name_their_file() {
+        for (url, path) in [
+            ("data/chapkit.db", "data/chapkit.db"),
+            ("sqlite:///data/chapkit.db", "data/chapkit.db"),
+            ("sqlite:////var/lib/chapkit.db", "/var/lib/chapkit.db"),
+            ("sqlite+aiosqlite:///data/chapkit.db", "data/chapkit.db"),
+            ("sqlite:data/chapkit.db", "data/chapkit.db"),
+        ] {
+            assert_eq!(sqlite_path(Some(url)).ok().flatten(), Some(path), "{url:?}");
+        }
+    }
+
+    #[test]
+    fn other_schemes_are_refused() {
+        assert!(sqlite_path(Some("postgres://localhost/chap")).is_err());
     }
 }

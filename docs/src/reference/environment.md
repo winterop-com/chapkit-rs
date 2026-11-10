@@ -8,7 +8,7 @@ variable over a value set in the model's code ([command line](cli.md#a-model-bin
 |---|---|---|
 | `HOST` | `127.0.0.1` | address to bind; `0.0.0.0` to accept calls from containers |
 | `PORT` | `8000` | port to bind |
-| `DATABASE_URL` | in memory | `:memory:`, a path, `sqlite:///path` or chapkit's `sqlite+aiosqlite:///path`; with the `turso` feature also `turso::memory:` or `turso:///path`. Three slashes mean a path relative to the working directory, four an absolute one (`sqlite:////var/lib/chapkit.db`), as in SQLAlchemy |
+| `DATABASE_URL` | in memory | `:memory:` (also `sqlite::memory:`, `sqlite://`), a path, `sqlite:///path` or chapkit's `sqlite+aiosqlite:///path`; with the `turso` feature also `turso::memory:` or `turso:///path`. Three slashes mean a path relative to the working directory, four an absolute one (`sqlite:////var/lib/chapkit.db`), as in SQLAlchemy |
 | `CHAPKIT_EAGER_WAIT_MS` | `1000` | how long `$train`/`$predict` wait for a job before replying 202 |
 | `CHAPKIT_MAX_CONCURRENCY` | `1` | jobs running at once |
 | `CHAPKIT_MAX_BODY_MB` | `1024` | largest accepted request body; larger bodies get a 413 problem |

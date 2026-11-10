@@ -5,6 +5,7 @@
 //! which matters when explainers build thousands of perturbed inputs.
 
 mod column;
+mod decode;
 mod frame;
 #[cfg(feature = "polars")]
 mod polars_conv;
@@ -106,6 +107,19 @@ mod tests {
         }));
         let g = df.group_indices("location").unwrap();
         assert_eq!(g, vec![("B".into(), vec![0, 2]), ("A".into(), vec![1])]);
+        // Runs of the same key and keys coming back after a gap, plus a null key.
+        let runs = decode(json!({
+            "columns": ["location"],
+            "data": [["A"], ["A"], ["B"], ["B"], ["A"], [null], ["B"]]
+        }));
+        assert_eq!(
+            runs.group_indices("location").unwrap(),
+            vec![
+                ("A".into(), vec![0, 1, 4]),
+                ("B".into(), vec![2, 3, 6]),
+                (String::new(), vec![5])
+            ]
+        );
 
         let other = decode(json!({"columns": ["location", "v"], "data": [["C", 0.5]]}));
         let s = DataFrame::vstack(&[&df, &other]).unwrap();

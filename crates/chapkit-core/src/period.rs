@@ -16,6 +16,10 @@ impl Period {
     /// Parse a chap period id. Returns `None` for anything else (years, days, ranges).
     pub fn parse(s: &str) -> Option<Period> {
         let s = s.trim();
+        // Fast path for the common monthly forms, called once per row on large frames.
+        if let Some(p) = Self::parse_monthly_digits(s.as_bytes()) {
+            return Some(p);
+        }
         let num = |t: &str| t.parse::<u32>().ok();
         let year = |t: &str| t.parse::<i32>().ok();
         for (sep, sunday) in [("-S", true), ("SunW", true), ("-W", false), ("W", false)] {
@@ -39,6 +43,26 @@ impl Period {
         (1..=12)
             .contains(&month)
             .then_some(Period::Month { year, month })
+    }
+
+    /// `YYYY-MM` or `YYYYMM` made of ASCII digits; `None` for anything else.
+    fn parse_monthly_digits(b: &[u8]) -> Option<Period> {
+        let digit = |c: u8| c.is_ascii_digit().then(|| u32::from(c - b'0'));
+        let (y, m) = match b {
+            [y0, y1, y2, y3, b'-', m0, m1] | [y0, y1, y2, y3, m0, m1] => {
+                ([*y0, *y1, *y2, *y3], [*m0, *m1])
+            }
+            _ => return None,
+        };
+        let mut year = 0u32;
+        for c in y {
+            year = year * 10 + digit(c)?;
+        }
+        let month = digit(m[0])? * 10 + digit(m[1])?;
+        (1..=12).contains(&month).then_some(Period::Month {
+            year: i32::try_from(year).ok()?,
+            month,
+        })
     }
 
     /// Number of distinct periods of year: 12 for months, 52 for weeks.
@@ -133,6 +157,25 @@ mod tests {
         assert_eq!(Period::parse("20240101"), None);
         // Non-ASCII input whose byte length matches a period id must not panic.
         assert_eq!(Period::parse("123é4"), None);
+        // The monthly fast path agrees with the general rules.
+        assert_eq!(
+            Period::parse(" 2024-03 "),
+            Some(Period::Month {
+                year: 2024,
+                month: 3
+            })
+        );
+        assert_eq!(
+            Period::parse("1850-12"),
+            Some(Period::Month {
+                year: 1850,
+                month: 12
+            })
+        );
+        assert_eq!(Period::parse("2024-00"), None);
+        assert_eq!(Period::parse("2024-1x"), None);
+        assert_eq!(Period::parse("202400"), None);
+        assert_eq!(Period::parse("2024+01"), None);
         assert_eq!(Period::parse("2024é"), None);
         assert_eq!(Period::parse("é2024-01"), None);
         assert_eq!(Period::parse("2024Wé"), None);

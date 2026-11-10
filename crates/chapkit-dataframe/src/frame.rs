@@ -4,7 +4,9 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::column::{Column, DType};
+use crate::column::Column;
+#[cfg(test)]
+use crate::column::DType;
 
 /// Errors raised when building or reshaping a frame.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -244,6 +246,35 @@ impl DataFrame {
     pub fn group_indices(&self, key: &str) -> Result<Vec<(String, Vec<usize>)>, FrameError> {
         let col = self.require(key)?;
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
+        // String columns (the usual case) borrow their keys: one allocation per group, not per row.
+        if let Column::Str(values) = col {
+            let mut pos: HashMap<&str, usize> = HashMap::new();
+            // Chap data usually arrives sorted by location: a row with the same key as the one
+            // before joins the same group without hashing.
+            let mut last: Option<(&str, usize)> = None;
+            for (row, v) in values.iter().enumerate() {
+                let k = v.as_deref().unwrap_or_default();
+                if let Some((lk, i)) = last
+                    && lk == k
+                {
+                    if let Some(group) = order.get_mut(i) {
+                        group.1.push(row);
+                    }
+                    continue;
+                }
+                if let Some(&i) = pos.get(k) {
+                    last = Some((k, i));
+                    if let Some(group) = order.get_mut(i) {
+                        group.1.push(row);
+                    }
+                } else {
+                    last = Some((k, order.len()));
+                    pos.insert(k, order.len());
+                    order.push((k.to_owned(), vec![row]));
+                }
+            }
+            return Ok(order);
+        }
         let mut pos: HashMap<String, usize> = HashMap::new();
         for row in 0..self.n_rows {
             let k = match col.str_at(row) {
@@ -286,7 +317,16 @@ impl DataFrame {
         self.columns.iter().map(|c| c.json_at(row)).collect()
     }
 
-    fn from_wire(w: Wire) -> Result<Self, FrameError> {
+    /// Set the row count of a frame assembled column by column (the decoder; frames with no
+    /// columns have no other way to know it).
+    pub(crate) fn set_rows(&mut self, n: usize) {
+        self.n_rows = n;
+    }
+
+    /// The previous decoder: cells as `Value`s, row by row, then transposed. Kept as the
+    /// reference the streaming decoder is tested against.
+    #[cfg(test)]
+    pub(crate) fn from_wire_reference(w: Wire) -> Result<Self, FrameError> {
         let width = w.columns.len();
         let types: HashMap<&str, DType> = w
             .schema
@@ -322,8 +362,9 @@ impl DataFrame {
     }
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
-struct Wire {
+pub(crate) struct Wire {
     columns: Vec<String>,
     data: Vec<Vec<Value>>,
     #[serde(default)]
@@ -331,21 +372,20 @@ struct Wire {
 }
 
 #[derive(Deserialize, Serialize)]
-struct WireSchema {
-    fields: Vec<WireField>,
+pub(crate) struct WireSchema {
+    pub(crate) fields: Vec<WireField>,
 }
 
 #[derive(Deserialize, Serialize)]
-struct WireField {
-    name: String,
+pub(crate) struct WireField {
+    pub(crate) name: String,
     #[serde(rename = "type")]
-    r#type: String,
+    pub(crate) r#type: String,
 }
 
 impl<'de> Deserialize<'de> for DataFrame {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let w = Wire::deserialize(d)?;
-        DataFrame::from_wire(w).map_err(serde::de::Error::custom)
+        d.deserialize_any(crate::decode::FrameVisitor)
     }
 }
 

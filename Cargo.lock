@@ -565,6 +565,7 @@ name = "chapkit-core"
 version = "0.1.0"
 dependencies = [
  "chapkit-dataframe",
+ "rayon",
  "safetensors",
  "schemars",
  "serde",

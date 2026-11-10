@@ -7,6 +7,7 @@
 pub mod checkpoint;
 mod error;
 mod info;
+pub mod locations;
 mod model;
 pub mod period;
 mod prediction;
@@ -14,6 +15,7 @@ pub mod rng;
 mod run;
 pub mod search;
 pub mod synth;
+pub mod testing;
 
 pub use chapkit_dataframe::{self as frame, Column, DType, DataFrame, FrameError, cols};
 pub use checkpoint::{Checkpoint, Provenance, Tensor, TensorData};

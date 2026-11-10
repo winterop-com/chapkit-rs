@@ -1,8 +1,10 @@
 # Writing a model package
 
 A model package is a Rust crate that depends on `chapkit`, implements `Model`, and has a `main` that serves
-it. The packages in `chapkit-rs-models` are complete examples: `baselines` (three models, one binary
-each) and `ridge`.
+it. The packages in `chapkit-rs-models` are complete examples: the three `baseline-*` ports of chap-core's
+baselines and `ridge`. Each keeps its calculation in `src/model.rs` (plain functions over numbers), the chapkit
+plumbing in `src/lib.rs` and the binary in `src/main.rs`; `chapkit::locations` does the per-location splitting,
+parallelism and prediction table.
 
 ## Cargo.toml
 

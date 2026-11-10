@@ -69,51 +69,65 @@ This is the cost explainers and search pay per evaluation when they run inside t
 ## Scaling with locations and periods
 
 `make bench-scale` in `chapkit-rs-models` runs chap-core's three built-in baselines and the Rust ports
-in-process on identical generated monthly data, one process per size, one core each (neither side is
-parallel). Milliseconds; "convert" is chap-core turning pandas into its `DataSet` before calling the model,
-"decode" is chapkit-rs parsing the same data from JSON when it arrives over HTTP.
+in-process on identical generated monthly data (100 to 5000 locations, 120 to 5000 periods), one process per
+size. Times are milliseconds for train plus predict; "convert" is chap-core turning pandas into its `DataSet`
+before calling a model, "decode" is chapkit-rs parsing the same data from JSON as it arrives over HTTP. CPU
+time is measured inside each process; cores used is CPU time over wall time. Peak memory is the whole process.
+
+**Same output.** `make bench-compare` runs both on the same data and compares all 100 samples of every forecast
+row: global_median and seasonal_median are bit-for-bit identical at every size (5.8 million samples in all),
+seasonal_shift_persistence differs by at most 3.5e-16 relative (the last bit of a float).
+
+**chap-core uses one core**: its CPU time equals its wall time in every run.
 
 global_median:
 
-| locations x periods | rows | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
-|---|---|---|---|---|---|
-| 500 x 120 | 60,000 | 234 | 23 | 11 | 4.2 |
-| 1000 x 120 | 120,000 | 472 | 45 | 27 | 9.1 |
-| 2000 x 120 | 240,000 | 929 | 90 | 52 | 19 |
-| 5000 x 120 | 600,000 | 2,283 | 221 | 138 | 48 |
-| 100 x 5000 | 500,000 | 399 | 15 | 113 | 17 |
-| 2000 x 2000 | 4,000,000 | 2,106 | 140 | 855 | 152 |
+| locations x periods | chap-core convert | chap-core train + predict | chap-core peak MB | Rust 1 core | Rust all cores (cores used) | Rust peak MB | Rust decode |
+|---|---|---|---|---|---|---|---|
+| 500 x 120 | 229 | 22.5 | 149 | 3.0 | 3.5 (4.5) | 25 | 10 |
+| 5000 x 120 | 2,296 | 223 | 315 | 37.5 | 35.5 (2.7) | 159 | 105 |
+| 100 x 5000 | 398 | 14.3 | 258 | 6.1 | 4.6 (3.1) | 92 | 90 |
+| 2000 x 2000 | 2,112 | 141 | 1,206 | 65.8 | 49.8 (2.1) | 703 | 693 |
 
 seasonal_median:
 
-| locations x periods | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
-|---|---|---|---|---|
-| 500 x 120 | 223 | 152 | 11 | 13 |
-| 5000 x 120 | 2,243 | 1,538 | 136 | 142 |
-| 100 x 5000 | 399 | 99 | 114 | 73 |
-| 2000 x 2000 | 2,128 | 1,182 | 862 | 624 |
+| locations x periods | chap-core convert | chap-core train + predict | chap-core peak MB | Rust 1 core | Rust all cores (cores used) | Rust peak MB | Rust decode |
+|---|---|---|---|---|---|---|---|
+| 500 x 120 | 222 | 152 | 151 | 7.2 | 4.8 (5.2) | 35 | 10 |
+| 5000 x 120 | 2,265 | 1,530 | 380 | 84.0 | 55.4 (4.6) | 226 | 105 |
+| 100 x 5000 | 401 | 97.6 | 259 | 20.6 | 9.8 (5.0) | 103 | 89 |
+| 2000 x 2000 | 2,120 | 1,185 | 1,232 | 220 | 94.5 (3.7) | 799 | 691 |
 
 seasonal_shift_persistence:
 
-| locations x periods | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
-|---|---|---|---|---|
-| 500 x 120 | 232 | 169 | 13 | 26 |
-| 5000 x 120 | 2,253 | 1,732 | 147 | 461 |
-| 100 x 5000 | 432 | 174 | 113 | 144 |
-| 2000 x 2000 | 2,125 | 1,706 | 894 | 1,269 |
+| locations x periods | chap-core convert | chap-core train + predict | chap-core peak MB | Rust 1 core | Rust all cores (cores used) | Rust peak MB | Rust decode |
+|---|---|---|---|---|---|---|---|
+| 500 x 120 | 224 | 165 | 178 | 14.8 | 7.2 (6.2) | 61 | 10 |
+| 5000 x 120 | 2,281 | 1,784 | 586 | 180 | 103 (4.5) | 399 | 105 |
+| 100 x 5000 | 443 | 223 | 370 | 53.4 | 27.7 (4.2) | 227 | 92 |
+| 2000 x 2000 | 2,156 | 1,736 | 2,122 | 557 | 265 (3.7) | 1,974 | 723 |
 
 What this shows:
 
-- **Both scale linearly.** At these sizes neither side blows up: time grows in proportion to rows.
-- **Many locations favour Rust**, 4 to 12 times on the model calls. Long histories with few locations do
-  not: at 100 x 5000 global_median is about even, since numpy's per-location work is already vectorised.
-- **chap-core's pandas-to-`DataSet` conversion costs more than the models themselves**, up to 2.3 s at
-  5000 locations; chapkit-rs's JSON decode of the same data is about 16 times cheaper.
-- **Peak memory** at 4 million rows, model alone: global_median 0.7 GB in Rust and 1.2 GB in chap-core;
-  seasonal_shift_persistence 1.9 GB and 2.1 GB. Rust stores every string cell (period, location)
-  separately; interning them is the obvious next saving.
+- **Faster at every size.** On one core against chap-core's one core, the Rust models are 2 to 24 times faster;
+  on all cores 3 to 31 times. Counting the data step too (chap-core's pandas conversion against chapkit-rs's
+  JSON decode), a train and predict is 3 to 25 times faster.
+- **Many locations favour Rust most** (seasonal_median at 5000 locations: 1,530 ms against 55 ms). Long histories
+  with few locations favour it least, because numpy already handles one long series well; there JSON decoding
+  is most of chapkit-rs's time.
+- **chap-core's pandas-to-`DataSet` conversion costs more than its models**: 2.3 s at 5000 locations, against
+  0.1 s for chapkit-rs to decode the same data from JSON.
+- **Less memory at every size**, from about a tenth at small sizes to slightly less at 4 million rows.
+- **All cores trade CPU for latency.** Splitting locations over cores shortens a call but costs more CPU in
+  total than one core (seasonal_shift_persistence at 5000 x 120: 103 ms wall but about 460 ms CPU, against
+  180 ms on one core). For a service handling many calls at once, `RAYON_NUM_THREADS=1` gives the most work
+  per core.
 
-All outputs have the expected number of rows on both sides; `bench/scale_results.json` holds every run.
+The models were profiled before this run: period parsing, grouping by location and per-ratio map lookups were
+the hot spots, and fixing them made the single-core times about twice as fast. polars was measured as an
+alternative for the per-location work and was 3 to 4 times slower than the plain Rust here (its conversion
+alone costs as much as a whole training); it remains an optional tool for writing complex models.
+`bench/scale_results.json` holds every run.
 
 ## Footprint
 

@@ -1,6 +1,6 @@
-.PHONY: help check test-turso build release lint fmt test bench doc docs docs-serve openapi compare-openapi examples-check examples-release clean
+.PHONY: help check test-turso build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
 
-EXAMPLES ?= ../chapkit-rs-examples
+MODELS ?= ../chapkit-rs-models
 
 
 help:
@@ -9,7 +9,7 @@ help:
 	@echo "Targets:"
 	@echo "  check     lint + test; run before every commit"
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
-	@echo "  build     Build the workspace, examples and benches (debug)"
+	@echo "  build     Build the workspace, tests and benches (debug)"
 	@echo "  release   Build the workspace in release mode"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
@@ -20,8 +20,8 @@ help:
 	@echo "  docs-serve  Serve the mdBook with live reload"
 	@echo "  openapi   Regenerate the committed openapi.json"
 	@echo "  compare-openapi PY=<url> RS=<url>  Diff a Python chapkit service's OpenAPI against a chapkit-rs one"
-	@echo "  examples-check    Run make check in $(EXAMPLES)"
-	@echo "  examples-release  Build the example binaries into $(EXAMPLES)/bin"
+	@echo "  models-check    Run make check in $(MODELS)"
+	@echo "  models-release  Build the model binaries into $(MODELS)/bin"
 	@echo "  clean     Remove build output"
 
 check: lint test
@@ -68,11 +68,11 @@ compare-openapi:
 	@if [ -z "$(PY)" ] || [ -z "$(RS)" ]; then echo "usage: make compare-openapi PY=<python chapkit url> RS=<chapkit-rs url>"; exit 2; fi
 	@python3 scripts/compare_openapi.py $(PY) $(RS)
 
-examples-check:
-	@$(MAKE) -C $(EXAMPLES) check
+models-check:
+	@$(MAKE) -C $(MODELS) check
 
-examples-release:
-	@$(MAKE) -C $(EXAMPLES) release
+models-release:
+	@$(MAKE) -C $(MODELS) release
 
 clean:
 	@cargo clean

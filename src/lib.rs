@@ -5,8 +5,8 @@
 //! `$train`, `$predict`, health, info), wire-compatible with Python chapkit so
 //! chap-core can use it unchanged.
 //!
-//! Example models, starting with ports of chap-core's baselines, are under
-//! `examples/` and are not part of the library.
+//! Model packages, starting with ports of chap-core's baselines, live in the
+//! separate chapkit-rs-models repository and are not part of the library.
 
 mod erased;
 mod ml;

@@ -23,8 +23,9 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - root package `chapkit`: the crate users depend on. `Service` turns a `Model` into the full
   chapkit-compatible API; re-exports the crates above.
 - `tests/contract.rs`: the chapkit HTTP contract end to end, with a tiny model defined in the test.
-- Example models live in the sibling repository `../chapkit-rs-examples` (chap-core baseline ports with
-  parity tests, ridge). They depend on this library by path; run their `make check` after API changes.
+- Model packages live in the sibling repository `../chapkit-rs-models` (chap-core baseline ports with
+  parity tests, ridge). They depend on this library by path; update them with every library change and run
+  `make models-check`.
 
 ## Workflow
 

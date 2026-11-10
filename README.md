@@ -45,8 +45,8 @@ write and serve a model package, testing with chap-core, and the results.
 | `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, SSE, metrics, auth, registration, OpenAPI. |
 | `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend, turso backend (feature `turso`). |
 
-Example models (ports of chap-core's baselines, checked against chap-core number for number, and a
-covariate model for xAI/HPO) live next door in `../chapkit-rs-examples`.
+Model packages (ports of chap-core's baselines, checked against chap-core number for number, and a
+covariate model for xAI/HPO) live next door in `../chapkit-rs-models`.
 
 ## A model
 
@@ -95,7 +95,7 @@ make test-turso       # store suite and HTTP contract on the turso backend
 make bench            # criterion benchmarks
 make openapi          # regenerate the committed openapi.json
 make compare-openapi PY=<url> RS=<url>   # diff against a running Python chapkit service (base URLs)
-make examples-check   # make check in ../chapkit-rs-examples
-make examples-release # example binaries into ../chapkit-rs-examples/bin
+make models-check     # make check in ../chapkit-rs-models
+make models-release   # model binaries into ../chapkit-rs-models/bin
 make docs             # build the book
 ```

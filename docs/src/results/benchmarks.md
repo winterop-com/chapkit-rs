@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured 2026-11-09 on an Apple Silicon laptop. All numbers come from scripts in `chapkit-rs-examples`:
+Measured 2026-11-09 on an Apple Silicon laptop. All numbers come from scripts in `chapkit-rs-models`:
 `bench/run.py` (HTTP, real processes on localhost), `bench/builtin_inprocess.py` (chap-core's built-in
 baseline in Python) and `make bench` (criterion, the Rust model in-process).
 

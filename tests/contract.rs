@@ -7,7 +7,7 @@
 //! The chapkit HTTP contract, end to end and in-process, with a tiny model defined
 //! here: the exact flow chap-core runs (config, $train, poll job, $predict, poll job,
 //! read artifact), plus error shapes. Model-specific checks (parity with chap-core's
-//! baselines) live in the chapkit-rs-examples repository.
+//! baselines) live in the chapkit-rs-models repository.
 
 use axum::Router;
 use axum::body::Body;

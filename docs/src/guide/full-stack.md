@@ -139,6 +139,28 @@ cdx api GET /v1/crud/model-templates
 chap-core `master` ships all three baselines built in (2.6.0 had only the two medians), so each port can be
 compared with its original through chap-core.
 
+## 6. Swap in a new build of a model
+
+After changing a model, publish its images (push to `main`; the image workflow builds them) and replace the
+running ones:
+
+```sh
+for m in global_median seasonal_median seasonal_shift_persistence; do cdx models remove baseline_$m; done
+for m in global-median seasonal-median seasonal-shift-persistence; do
+  cdx models add ghcr.io/winterop-com/chapkit-rs-models/baseline-$m:latest --service-id $m
+done
+cdx up --wait
+```
+
+`cdx models remove` retires the model in chap-core and archives its configured models. A locally built image only
+works if it was built for linux/amd64 (finding 5).
+
+## 7. Open the Modeling App
+
+`cdx open dhis2`, log in as `admin` / `district`, and pick **Modeling** in the app menu, or go straight to
+<http://localhost:8780/apps/dhis2-chapmodeling-app>. The Models page took about 10 seconds to load its 19
+configured models.
+
 ## Findings
 
 | # | finding | where | status |
@@ -146,4 +168,6 @@ compared with its original through chap-core.
 | 1 | The ports register with the same display names as chap-core's built-in baselines ("Global median", ...), so the Modeling App's model list shows two entries with one name, told apart only by the author. | chapkit-rs-models | open |
 | 2 | The ports declare `author_assessed_status: green`; chap-core rates its identical built-ins `red` (baselines are yardsticks, not forecasting models). | chapkit-rs-models | open |
 | 3 | `organization` and `documentation_url` are empty; the models book is the obvious documentation URL. The library supports both. | chapkit-rs-models | open |
-| 4 | The Python reference model ships an amd64-only image; the chapkit-rs images are built for amd64 and arm64, so they run natively on Apple Silicon. | marketplace | noted |
+| 4 | The Python reference model ships an amd64-only image; the chapkit-rs images are built for amd64 and arm64. | marketplace | noted |
+| 5 | chap-devops pins every model, and chap-core, to `linux/amd64` (most marketplace images are amd64-only), so on Apple Silicon the whole stack runs emulated, the chapkit-rs images included, although they ship arm64. It also only accepts locally built model images for linux/amd64: a native arm64 build from `make docker-build` is refused ("not in the local image store for linux/amd64"). Running natively needs `cdx run` outside a deployment. | chap-devops | open (chap-devops' call) |
+| 6 | Retiring a model (`cdx models remove`) and registering a new build does not change what chap-core already stored: its model templates kept the old display names and status. | chap-core | checking |

@@ -5,9 +5,10 @@ cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
 chapkit-rs --help
 ```
 
-From a checkout, `make release` builds it into `bin/chapkit-rs`, with `bin/crs` as a short alias, and
-`make install-cli` installs it. Elsewhere, `alias crs=chapkit-rs` gives the same shorthand; the docs use
-`chapkit-rs` in full.
+From a checkout, `make release` builds it into `bin/chapkit-rs` for this machine, and `make release-universal`
+builds one macOS binary for both Apple Silicon and Intel. `make install` installs it into `~/.local/bin` (or
+`PREFIX/bin`) with `crs` as its short form, as chap-devops installs itself with `cdx`; the docs use `chapkit-rs`
+in full.
 
 | command | |
 |---|---|

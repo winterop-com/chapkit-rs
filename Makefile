@@ -1,4 +1,4 @@
-.PHONY: help install-cli check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
+.PHONY: help install release-universal check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
 
@@ -7,12 +7,13 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  install-cli  Install the chapkit-rs command (init, test) into ~/.cargo/bin"
+	@echo "  install   Install bin/chapkit-rs and its short form crs into PREFIX/bin (PREFIX defaults to ~/.local)"
 	@echo "  check     lint + test; run before every commit"
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
 	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
 	@echo "  build     Build the workspace, tests and benches (debug)"
 	@echo "  release   Build the workspace in release mode; the chapkit-rs command into ./bin"
+	@echo "  release-universal  macOS: the chapkit-rs command for Apple Silicon and Intel in one binary"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
 	@echo "  test      Run all tests"
@@ -26,8 +27,15 @@ help:
 	@echo "  models-release  Build the model binaries into $(MODELS)/bin"
 	@echo "  clean     Remove build output"
 
-install-cli:
-	@cargo install --path crates/chapkit-cli
+PREFIX ?= $(HOME)/.local
+
+# As chap-devops installs itself and cdx: crs is a link, left alone if it is another program.
+install: release
+	@mkdir -p $(PREFIX)/bin
+	@install -m 0755 bin/chapkit-rs $(PREFIX)/bin/chapkit-rs
+	@if [ -e $(PREFIX)/bin/crs ] && [ "$$(readlink $(PREFIX)/bin/crs)" != "chapkit-rs" ]; then \
+		echo "installed $(PREFIX)/bin/chapkit-rs; $(PREFIX)/bin/crs is another program, so it was left alone"; \
+	else ln -sf chapkit-rs $(PREFIX)/bin/crs && echo "installed $(PREFIX)/bin/chapkit-rs, and $(PREFIX)/bin/crs as its short form"; fi
 
 check: lint test
 
@@ -44,8 +52,16 @@ build:
 
 release:
 	@cargo build --workspace --release
-	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs && ln -sf chapkit-rs bin/crs
+	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs
 	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
+
+# Both macOS architectures, joined with lipo into one binary (as chap-devops ships its macOS build).
+release-universal:
+	@cargo build --release -p chapkit-cli --target aarch64-apple-darwin
+	@cargo build --release -p chapkit-cli --target x86_64-apple-darwin
+	@mkdir -p bin && lipo -create -output bin/chapkit-rs \
+		target/aarch64-apple-darwin/release/chapkit-rs target/x86_64-apple-darwin/release/chapkit-rs
+	@lipo -info bin/chapkit-rs
 
 lint:
 	@echo ">>> Formatting"

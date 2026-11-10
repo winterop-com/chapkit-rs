@@ -4,6 +4,8 @@
 //! A port of chap-core 2.7.0's `chap_core.assessment`, checked against fixtures chap-core generates
 //! (`scripts/gen_eval_fixtures.py`):
 //!
+//! - [`prepare()`]: the dataset as chap-core loads it (`fill_missing=True`): sorted, gaps filled,
+//!   every location padded to the same period range;
 //! - [`split`]: `train_test_generator`'s expanding windows and `backtest`'s retraining points;
 //! - [`weather`]: the future covariates of each window ([`Climatology`], chap-core's default, and
 //!   [`Observed`], which looks ahead and is for diagnostics only);
@@ -17,11 +19,13 @@
 mod backtest;
 pub mod mask;
 pub mod metrics;
+pub mod prepare;
 pub mod split;
 pub mod weather;
 
 pub use backtest::{Backtest, Forecast, backtest, backtest_model};
 pub use mask::{MASK_INDICATOR, MaskedRange, mask_target};
 pub use metrics::{Metric, Scores, score};
+pub use prepare::{Prepare, prepare};
 pub use split::{Options, Split, Splits, retrain_points, train_test_splits};
 pub use weather::{Climatology, Observed, WeatherProvider, weather_provider};

@@ -79,6 +79,7 @@ fn bench(c: &mut Criterion) {
         splits: 7,
         stride: 1,
         retrain: 1,
+        ..Options::default()
     };
     c.bench_function("backtest_136x300_weekly_7x12", |b| {
         b.iter(|| {

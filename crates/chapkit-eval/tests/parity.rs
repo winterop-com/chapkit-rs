@@ -9,12 +9,18 @@ use chapkit_core::{
     prediction_frame,
 };
 use chapkit_eval::{
-    Forecast, MaskedRange, Metric, Options, Scores, backtest_model, mask_target, score,
-    train_test_splits, weather_provider,
+    Forecast, MaskedRange, Metric, Options, Prepare, Scores, backtest_model, mask_target, prepare,
+    score, train_test_splits, weather_provider,
 };
 use serde_json::Value;
 
-const CASES: [&str; 3] = ["monthly", "weekly", "masked"];
+const CASES: [&str; 5] = [
+    "monthly",
+    "weekly",
+    "masked",
+    "messy_monthly",
+    "messy_weekly",
+];
 
 struct Case {
     fixture: Value,
@@ -44,6 +50,7 @@ fn case(name: &str) -> Case {
         splits: n("n_splits"),
         stride: n("stride"),
         retrain: n("n_retrain"),
+        ..Options::default()
     };
     Case {
         fixture,
@@ -197,7 +204,7 @@ fn assert_scores(scores: &Scores, want: &Value, tol: f64, ctx: &str) {
 fn metrics_match_chap_core() {
     for name in CASES {
         let c = case(name);
-        for model in ["seasonal_median", "covariate"] {
+        for model in ["seasonal_median", "covariate", "since_last"] {
             let want = &c.fixture["models"][model];
             let scores = score(&forecasts(&want["forecasts"]), &c.data).unwrap();
             assert_scores(&scores, want, 1e-12, &format!("{name}/{model}"));
@@ -267,40 +274,201 @@ impl Model for Covariate {
     }
 }
 
-/// The whole backtest of the test model (climatology weather, retraining) gives chap-core's
-/// forecasts and metrics.
+/// The fixture script's `SinceLast` test model: counts the periods since the last observation.
+struct SinceLast;
+
+impl Model for SinceLast {
+    type Config = NoConfig;
+    type Trained = ();
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &NoConfig, _: TrainInput<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn predict(&self, (): &(), _: &NoConfig, input: PredictInput<'_>) -> Result<DataFrame> {
+        let h = input.historic;
+        let (tp, loc) = (h.require(cols::TIME_PERIOD)?, h.require(cols::LOCATION)?);
+        let y = h.f64_column(cols::DISEASE_CASES)?;
+        let mut series: HashMap<&str, Vec<(Period, f64)>> = HashMap::new();
+        for (r, v) in y.iter().enumerate() {
+            let p = Period::parse(tp.str_at(r).unwrap()).unwrap();
+            series
+                .entry(loc.str_at(r).unwrap())
+                .or_default()
+                .push((p, *v));
+        }
+        // (last observed value, history rows from it to the end), per location.
+        let state: HashMap<&str, (f64, f64)> = series
+            .into_iter()
+            .map(|(l, mut s)| {
+                s.sort_by_key(|x| x.0);
+                let i = s.iter().rposition(|x| x.1.is_finite()).unwrap();
+                (l, (s[i].1, (s.len() - i) as f64))
+            })
+            .collect();
+        let floc = input.future.require(cols::LOCATION)?;
+        let mut step: HashMap<&str, f64> = HashMap::new();
+        prediction_frame(input.future, OFFSETS.len(), |r, out| {
+            let l = floc.str_at(r).unwrap();
+            let k = step.entry(l).or_insert(0.0);
+            let (last, since) = state[l];
+            let base = last + 2.0 * (since + *k);
+            *k += 1.0;
+            for (o, offset) in out.iter_mut().zip(OFFSETS) {
+                *o = (base + offset).max(0.0);
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The first difference between a Rust backtest of `model` and chap-core's for the fixture's
+/// `model_id`, if any: forecasts and metrics to 1e-12.
+fn backtest_difference<M: Model<Config = NoConfig>>(
+    model: &M,
+    model_id: &str,
+    c: &Case,
+    options: &Options,
+) -> Option<String> {
+    let want = &c.fixture["models"][model_id];
+    let weather = weather_provider("climatology").unwrap();
+    let bt = match backtest_model(model, &NoConfig {}, &c.data, options, weather.as_ref()) {
+        Ok(bt) => bt,
+        Err(e) => return Some(e.to_string()),
+    };
+    let expected = forecasts(&want["forecasts"]);
+    if bt.forecasts.len() != expected.len() {
+        return Some(format!(
+            "{} forecasts, chap-core {}",
+            bt.forecasts.len(),
+            expected.len()
+        ));
+    }
+    let key = |f: &Forecast| {
+        (
+            f.location.clone(),
+            Period::parse(&f.time_period).unwrap(),
+            f.horizon,
+        )
+    };
+    let got: HashMap<_, _> = bt.forecasts.iter().map(|f| (key(f), f)).collect();
+    for e in &expected {
+        let Some(g) = got.get(&key(e)) else {
+            return Some(format!("no forecast {:?}", key(e)));
+        };
+        for (a, b) in g.samples.iter().zip(&e.samples) {
+            if !close(*a, *b, 1e-12) {
+                return Some(format!("{:?}: {a} vs {b}", key(e)));
+            }
+        }
+    }
+    let scores = bt.score(&c.data).unwrap();
+    std::panic::catch_unwind(|| assert_scores(&scores, want, 1e-12, model_id))
+        .err()
+        .map(|_| "metrics differ".to_owned())
+}
+
+/// Whole backtests of the test models (climatology weather, retraining) give chap-core's
+/// forecasts and metrics, messy datasets included.
 #[test]
 fn backtest_matches_chap_core() {
     for name in CASES {
         let c = case(name);
-        let want = &c.fixture["models"]["covariate"];
-        let weather = weather_provider("climatology").unwrap();
-        let bt = backtest_model(
-            &Covariate,
-            &NoConfig {},
-            &c.data,
-            &c.options,
-            weather.as_ref(),
-        )
-        .unwrap();
-        let expected = forecasts(&want["forecasts"]);
-        assert_eq!(bt.forecasts.len(), expected.len(), "{name}");
-        let key = |f: &Forecast| {
+        for (id, diff) in [
             (
-                f.location.clone(),
-                Period::parse(&f.time_period).unwrap(),
-                f.horizon,
-            )
-        };
-        let got: HashMap<_, _> = bt.forecasts.iter().map(|f| (key(f), f)).collect();
-        for e in &expected {
-            let g = got[&key(e)];
-            for (a, b) in g.samples.iter().zip(&e.samples) {
-                assert!(close(*a, *b, 1e-12), "{name} {:?}: {a} vs {b}", key(e));
+                "covariate",
+                backtest_difference(&Covariate, "covariate", &c, &c.options),
+            ),
+            (
+                "since_last",
+                backtest_difference(&SinceLast, "since_last", &c, &c.options),
+            ),
+        ] {
+            assert_eq!(diff, None, "{name}/{id}");
+        }
+    }
+}
+
+/// Without chap-core's gap filling the periods since the last observation are counted over fewer
+/// rows: A's first forecast after its gap (2021-02, 2021-03) differs from chap-core's. The reason
+/// preparation is on by default.
+#[test]
+fn since_last_differs_without_filling() {
+    let c = case("messy_monthly");
+    let weather = weather_provider("climatology").unwrap();
+    let first_a = |options: &Options| {
+        let bt =
+            backtest_model(&SinceLast, &NoConfig {}, &c.data, options, weather.as_ref()).unwrap();
+        bt.forecasts
+            .into_iter()
+            .find(|f| f.location == "A" && f.horizon == 1)
+            .unwrap()
+    };
+    let chap_core = forecasts(&c.fixture["models"]["since_last"]["forecasts"])
+        .into_iter()
+        .find(|f| f.location == "A" && f.horizon == 1)
+        .unwrap();
+    let filled = first_a(&c.options);
+    assert_eq!(filled.samples, chap_core.samples);
+    let kept = first_a(&Options {
+        prepare: Prepare {
+            fill_gaps: false,
+            pad: false,
+        },
+        ..c.options
+    });
+    assert_eq!(
+        Period::parse(&kept.time_period),
+        Period::parse(&chap_core.time_period)
+    );
+    // History rows since the last observation: 3 in chap-core (2021-01 observed, 2 filled), 1 kept.
+    assert!((kept.samples[4] - chap_core.samples[4] + 4.0).abs() < 1e-12);
+    assert!(backtest_difference(&SinceLast, "since_last", &c, &c.options).is_none());
+}
+
+/// The dataset as chap-core loads it (`from_pandas(fill_missing=True)`), row for row.
+#[test]
+fn prepared_matches_chap_core() {
+    for name in CASES {
+        let c = case(name);
+        let got = prepare(&c.data, &Prepare::default()).unwrap();
+        let want = &c.fixture["prepared"];
+        let names: Vec<&str> = want["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(got.names(), names, "{name}");
+        let rows = want["data"].as_array().unwrap();
+        assert_eq!(got.n_rows(), rows.len(), "{name}");
+        for (r, w) in rows.iter().enumerate() {
+            let g = got.row_json(r);
+            assert_eq!(period(&g[0]), period(&w[0]), "{name} row {r}");
+            assert_eq!(g[1], w[1], "{name} row {r}");
+            for (a, b) in g.iter().zip(w.as_array().unwrap()).skip(2) {
+                assert_eq!(a.as_f64(), b.as_f64(), "{name} row {r}: {a} vs {b}");
             }
         }
-        assert_scores(&bt.score(&c.data).unwrap(), want, 1e-12, name);
     }
+}
+
+#[test]
+fn duplicate_rows_are_an_error() {
+    let c = case("monthly");
+    let first = c.data.take(&[0]).unwrap();
+    let data = DataFrame::vstack(&[&c.data, &first]).unwrap();
+    let weather = weather_provider("climatology").unwrap();
+    let e = train_test_splits(&data, &c.options, weather.as_ref()).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("location A has more than one row for 2018-01"),
+        "{e}"
+    );
 }
 
 #[test]

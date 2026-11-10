@@ -80,6 +80,48 @@ impl Period {
             Period::Week { week, .. } => week.min(52),
         }
     }
+
+    /// The next period: the next month, or the next ISO week (years have 52 or 53). `None` for
+    /// Sunday-start weeks, whose year lengths are not implemented.
+    pub fn succ(self) -> Option<Period> {
+        match self {
+            Period::Month { year, month: 12 } => Some(Period::Month {
+                year: year + 1,
+                month: 1,
+            }),
+            Period::Month { year, month } => Some(Period::Month {
+                year,
+                month: month + 1,
+            }),
+            Period::Week { sunday: true, .. } => None,
+            Period::Week { year, week, .. } if week >= iso_weeks(year) => Some(Period::Week {
+                year: year + 1,
+                week: 1,
+                sunday: false,
+            }),
+            Period::Week { year, week, .. } => Some(Period::Week {
+                year,
+                week: week + 1,
+                sunday: false,
+            }),
+        }
+    }
+}
+
+/// Weekday of January 1st of `year`, 0 = Monday (Gauss's algorithm).
+fn jan1_weekday(year: i32) -> i32 {
+    let y = year - 1;
+    (y.rem_euclid(4) * 5 + y.rem_euclid(100) * 4 + y.rem_euclid(400) * 6) % 7
+}
+
+/// Number of ISO weeks in `year`: 53 when it starts on a Thursday, or on a Wednesday in a leap year.
+pub fn iso_weeks(year: i32) -> u32 {
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    match jan1_weekday(year) {
+        3 => 53,
+        2 if leap => 53,
+        _ => 52,
+    }
 }
 
 impl fmt::Display for Period {
@@ -185,6 +227,20 @@ mod tests {
     fn period_of_year_pools_week_53() {
         assert_eq!(Period::parse("2020W53").unwrap().period_of_year(), 52);
         assert_eq!(Period::parse("2020-07").unwrap().period_of_year(), 7);
+    }
+
+    #[test]
+    fn succ_crosses_years_and_week_53() {
+        let next = |s: &str| Period::parse(s).unwrap().succ().unwrap().to_string();
+        assert_eq!(next("2020-12"), "2021-01");
+        assert_eq!(next("2020-03"), "2020-04");
+        assert_eq!(next("2020W52"), "2020W53");
+        assert_eq!(next("2020W53"), "2021W01");
+        assert_eq!(next("2021W52"), "2022W01");
+        assert_eq!(next("2015W52"), "2015W53");
+        assert_eq!(Period::parse("2020SunW03").unwrap().succ(), None);
+        let long: Vec<i32> = (2000..2031).filter(|y| iso_weeks(*y) == 53).collect();
+        assert_eq!(long, [2004, 2009, 2015, 2020, 2026]);
     }
 
     #[test]

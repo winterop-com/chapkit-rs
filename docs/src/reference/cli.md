@@ -169,7 +169,9 @@ Usage: my-model eval [OPTIONS]
       --splits <SPLITS>        Splits [default: 7]
       --stride <STRIDE>        Periods between splits [default: 1]
       --retrain <RETRAIN>      Trainings [default: 1]
-      --weather <WEATHER>      Future weather [default: climatology] [possible values: climatology, observed]
+      --weather <WEATHER>      Future weather (observed looks ahead) [default: climatology] [possible values: climatology, observed]
+      --keep-gaps              Keep gaps in a location's periods
+      --no-pad                 Do not pad locations to the full range
       --locations <LOCATIONS>  Generated locations [default: 5]
       --history <HISTORY>      Generated periods [default: 60]
       --seed <SEED>            Seed for generated data [default: random]
@@ -179,6 +181,9 @@ Usage: my-model eval [OPTIONS]
 A backtest of the model in-process, as chap-core runs one, with chap-core's metrics: no service, no
 database. `--periods`, `--splits`, `--stride` and `--retrain` are chap-core's `n_periods`, `n_splits`,
 `stride` and `n_retrain`, with its defaults. Without `--data` the dataset is generated as `test` generates
-it (`--locations` x `--history` periods, the model's covariates and period type); the seed is printed. It
+it (`--locations` x `--history` periods, the model's covariates and period type); the seed is printed. The
+dataset is prepared as chap-core prepares it: sorted, a duplicate period in a location an error, gaps filled
+and every location padded to the full period range; `--keep-gaps` and `--no-pad` turn filling and padding
+off, and the first line of the output then says so. It
 prints the aggregate metrics and the same by horizon, and with `--by-location` a table by location. See
 [Backtests in-process](../guide/eval.md).

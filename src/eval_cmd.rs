@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use chapkit_core::synth::{Generator, Resolution, Spec};
 use chapkit_core::{DataFrame, Period, PeriodType, PredictInput, RunInfo, TrainInput, cols};
-use chapkit_eval::{Metric, Options, Scores, weather_provider};
+use chapkit_eval::{Metric, Options, Prepare, Scores, weather_provider};
 use serde_json::{Value, json};
 
 use crate::cli::EvalArgs;
@@ -125,6 +125,10 @@ pub(crate) fn run(model: &dyn DynModel, id: &str, args: &EvalArgs) -> Result<Str
         splits: args.splits,
         stride: args.stride,
         retrain: args.retrain,
+        prepare: Prepare {
+            fill_gaps: !args.keep_gaps,
+            pad: !args.no_pad,
+        },
     };
     options.validate().map_err(|e| e.to_string())?;
     let info = model.info();
@@ -180,8 +184,15 @@ pub(crate) fn run(model: &dyn DynModel, id: &str, args: &EvalArgs) -> Result<Str
         .group_indices(cols::TIME_PERIOD)
         .map_err(|e| e.to_string())?
         .len();
+    // Preparation is named only when it is not chap-core's.
+    let preparation = match (args.keep_gaps, args.no_pad) {
+        (false, false) => "",
+        (true, false) => ", gaps kept",
+        (false, true) => ", not padded",
+        (true, true) => ", gaps kept, not padded",
+    };
     let mut out = format!(
-        "{id}: {} splits of {} periods, stride {}, {} training{}, {} weather\n\
+        "{id}: {} splits of {} periods, stride {}, {} training{}, {} weather{preparation}\n\
          data: {source}, {locations} locations x {n_periods} {unit}\n\
          backtest: {:.1} ms, {} forecasts scored\n\n{}",
         options.splits,
@@ -254,6 +265,8 @@ mod tests {
             stride: 1,
             retrain: 2,
             weather: Weather::Climatology,
+            keep_gaps: false,
+            no_pad: false,
             locations: 3,
             history: 30,
             seed: Some(7),
@@ -283,6 +296,39 @@ mod tests {
         let again = run(&Erased(Last), "last", &args()).unwrap();
         let table = |r: &str| r.split_once("\n\n").unwrap().1.to_owned();
         assert_eq!(table(&report), table(&again));
+    }
+
+    #[test]
+    fn prepares_as_chap_core_unless_told_not_to() {
+        let path =
+            std::env::temp_dir().join(format!("chapkit-eval-gaps-{}.csv", std::process::id()));
+        let mut csv = String::from("time_period,location,disease_cases\n");
+        for m in 1..=12 {
+            let _ = writeln!(csv, "2023-{m:02},A,{m}");
+            // B misses 2023-06 and ends at 2023-11.
+            if m != 6 && m != 12 {
+                let _ = writeln!(csv, "2023-{m:02},B,{m}");
+            }
+        }
+        std::fs::write(&path, csv).unwrap();
+        let chap = EvalArgs {
+            data: Some(path.clone()),
+            by_location: false,
+            ..args()
+        };
+        let report = run(&Erased(Last), "last", &chap).unwrap();
+        assert!(report.contains("climatology weather\n"), "{report}");
+        let kept = EvalArgs {
+            keep_gaps: true,
+            no_pad: true,
+            ..chap.clone()
+        };
+        let report = run(&Erased(Last), "last", &kept).unwrap();
+        assert!(
+            report.contains("climatology weather, gaps kept, not padded\n"),
+            "{report}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -14,10 +14,15 @@ Writes crates/chapkit-eval/fixtures/eval_<case>.json, each with:
   evaluation window, and a covariate never observed in one season for one location (so the
   climatology falls back to its regression);
 - `params`: n_periods, n_splits, stride, n_retrain (and masked ranges, if any);
+- `prepared`: the dataset as chap-core's REST API loads it (`DataSet.from_pandas(df,
+  fill_missing=True)`): sorted, gaps filled, every location padded to the same range. The
+  `messy_*` cases have a gap inside one location, a location starting later and one ending
+  earlier, a period missing for every location and shuffled rows (weekly across 2020W53);
 - `splits`: per weather provider, chap-core's `train_test_generator` windows: the last train
   period, each split's last historic period, its future periods and the masked future frame;
-- `models`: per model (chap-core's `seasonal_median`, and `covariate`, a deterministic test model
-  that reads history and future covariates, repeated in Rust), the flat forecasts of chap-core's
+- `models`: per model (chap-core's `seasonal_median`; `covariate`, a deterministic test model
+  that reads history and future covariates; `since_last`, one that counts the periods since the
+  last observation, as chap-core's persistence does; both repeated in Rust), the flat forecasts of chap-core's
   `backtest` with retraining and the metrics: the aggregate as chap-core's REST API stores it
   (`compute_all_aggregated_metrics_from_backtest`, observations from the whole dataset), and the
   breakdowns by horizon and by location.
@@ -152,6 +157,30 @@ class CovariatePredictor:
         return DataSet(out)
 
 
+class SinceLast:
+    """Deterministic test model, repeated in crates/chapkit-eval/tests/parity.rs.
+
+    For the h-th future period (0-based) of a location: max(0, last + 2 * (since + h) + OFFSETS[k]),
+    with `last` the last observed target in the historic data and `since` the number of historic
+    periods from it to the end of the history (1 when the last period is observed), as chap-core's
+    persistence baseline counts them: gaps and padding count.
+    """
+
+    def train(self, data: DataSet):
+        return self
+
+    def predict(self, historic: DataSet, future: DataSet) -> DataSet:
+        out = {}
+        for loc, f in future.items():
+            y = np.asarray(historic[loc].disease_cases, dtype=float)
+            observed = np.flatnonzero(np.isfinite(y))
+            last, since = float(y[observed[-1]]), len(y) - observed[-1]
+            steps = np.arange(len(f.time_period), dtype=float)
+            base = last + 2.0 * (since + steps)
+            out[loc] = Samples(f.time_period, np.maximum(base[:, None] + Covariate.OFFSETS[None, :], 0.0))
+        return DataSet(out)
+
+
 class Builtin:
     """chap-core's estimator shape around a built-in baseline: train returns the predictor."""
 
@@ -246,18 +275,35 @@ def metrics_of(ds: DataSet, estimator, params: dict) -> dict:
     }
 
 
+def messy(df: pd.DataFrame, periods: list[str], gap: range, late: int, early: int, everywhere: int, seed: int) -> pd.DataFrame:
+    """`df` with a gap in the first location, the second starting late, the third ending early,
+    one period missing everywhere, and the rows shuffled."""
+    locs = sorted(df.location.unique())
+    drop = (
+        ((df.location == locs[0]) & df.time_period.isin([periods[i] for i in gap]))
+        | ((df.location == locs[1]) & df.time_period.isin(periods[:late]))
+        | ((df.location == locs[2]) & df.time_period.isin(periods[early:]))
+        | (df.time_period == periods[everywhere])
+    )
+    kept = df[~drop]
+    return kept.iloc[np.random.default_rng(seed).permutation(len(kept))].reset_index(drop=True)
+
+
 def run(case: str, df: pd.DataFrame, params: dict, masked: list[dict] | None = None) -> None:
-    ds = DataSet.from_pandas(df)
+    # As chap-core's REST API loads a dataset (worker_functions.py, crud.py).
+    ds = DataSet.from_pandas(df, fill_missing=True)
     if masked:
         ds = ds.apply_masked_ranges([MaskedRange(**r) for r in masked])
     out = {
         "chap_core": "2.7.0",
         "params": params | ({"masked_ranges": masked} if masked else {}),
         "data": wire(df),
+        "prepared": wire(frame(ds)),
         "splits": {p: splits(ds, params, p) for p in PROVIDERS},
         "models": {
             "seasonal_median": metrics_of(ds, Builtin("seasonal_median"), params),
             "covariate": metrics_of(ds, Covariate(), params),
+            "since_last": metrics_of(ds, SinceLast(), params),
         },
     }
     path = OUT / f"eval_{case}.json"
@@ -282,4 +328,16 @@ if __name__ == "__main__":
         dataset(monthly, 36, 12, ["A", "B"], seed=3),
         {"n_periods": 2, "n_splits": 3, "stride": 1, "n_retrain": 3},
         masked=[{"start": "2018-03", "end": "2018-05"}],
+    )
+    # A gap in A at the end of the first split's history (2021-02, 2021-03), C ending 8 periods early.
+    run(
+        "messy_monthly",
+        messy(dataset(monthly, 48, 12, ["A", "B", "C", "D"], seed=4), [monthly(i) for i in range(48)], range(37, 39), 6, 40, 20, seed=4),
+        {"n_periods": 3, "n_splits": 4, "stride": 2, "n_retrain": 2},
+    )
+    # A's gap covers 2020W52 to 2021W01, across 2020W53.
+    run(
+        "messy_weekly",
+        messy(dataset(weekly, 130, 52, ["A", "B", "C"], seed=5), [weekly(i) for i in range(130)], range(103, 106), 10, 120, 60, seed=5),
+        {"n_periods": 4, "n_splits": 5, "stride": 1, "n_retrain": 2},
     )

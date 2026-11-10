@@ -1,8 +1,8 @@
 //! chap-core's expanding-window splits (`train_test_generator`) and retraining points.
 //!
-//! With `n` distinct periods, `split_idx = n - (periods + (splits - 1) * stride + 1)`. The train
+//! With `n` periods (with gap filling on, the contiguous range from the first to the last), `split_idx = n - (periods + (splits - 1) * stride + 1)`. The train
 //! set is every period up to `split_idx`; split `i` has the history up to `split_idx + i * stride`
-//! and forecasts the `periods` periods after it. Rows keep their order in the data.
+//! and forecasts the `periods` periods after it. Rows are in the prepared data's order.
 
 use std::collections::BTreeMap;
 
@@ -10,9 +10,11 @@ use chapkit_core::{DataFrame, Error, Period, Result, cols};
 use rayon::prelude::*;
 
 use crate::mask::{MASK_INDICATOR, check_mask_outside_window};
+use crate::prepare::{Prepare, prepare};
 use crate::weather::{WeatherProvider, masked_future};
 
-/// Backtest settings, as chap-core's `BacktestParams` (same defaults).
+/// Backtest settings, as chap-core's `BacktestParams` (same defaults), and how the dataset is
+/// prepared (chap-core's way by default).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     /// Periods forecast at each split (`n_periods`).
@@ -23,6 +25,8 @@ pub struct Options {
     pub stride: usize,
     /// Trainings, evenly spaced over the splits (`n_retrain`); 1 trains once.
     pub retrain: usize,
+    /// Dataset preparation before splitting ([`prepare`]).
+    pub prepare: Prepare,
 }
 
 impl Default for Options {
@@ -32,6 +36,7 @@ impl Default for Options {
             splits: 7,
             stride: 1,
             retrain: 1,
+            prepare: Prepare::default(),
         }
     }
 }
@@ -95,7 +100,7 @@ pub struct Splits {
 
 /// The periods of a dataset: sorted distinct periods and each row's position among them.
 pub(crate) struct Panel {
-    /// Sorted distinct periods.
+    /// Sorted distinct periods; with `contiguous`, every period from the first to the last.
     pub periods: Vec<Period>,
     /// Each period as first written in the data.
     pub labels: Vec<String>,
@@ -104,7 +109,7 @@ pub(crate) struct Panel {
 }
 
 impl Panel {
-    pub fn new(data: &DataFrame) -> Result<Panel> {
+    pub fn new(data: &DataFrame, contiguous: bool) -> Result<Panel> {
         let tp = data.require(cols::TIME_PERIOD)?;
         let mut parsed = Vec::with_capacity(data.n_rows());
         let mut labels: BTreeMap<Period, String> = BTreeMap::new();
@@ -124,6 +129,18 @@ impl Panel {
         {
             return Err(Error::invalid("data mixes monthly and weekly periods"));
         }
+        let (periods, labels) = match (contiguous, periods.first(), periods.last()) {
+            (true, Some(&first), Some(&last)) => {
+                let written: BTreeMap<Period, String> = periods.into_iter().zip(labels).collect();
+                let all = crate::prepare::contiguous(first, last)?;
+                let labels = all
+                    .iter()
+                    .map(|p| written.get(p).cloned().unwrap_or_else(|| p.to_string()))
+                    .collect();
+                (all, labels)
+            }
+            _ => (periods, labels),
+        };
         let row_period = parsed
             .iter()
             .map(|p| periods.binary_search(p).unwrap_or_default())
@@ -153,8 +170,8 @@ fn rows(
     Ok((data.take(&idx)?, periods))
 }
 
-/// Split `data` as chap-core's `train_test_generator`, filling each window's covariates from
-/// `weather`.
+/// Prepare `data` ([`Options::prepare`]) and split it as chap-core's `train_test_generator`,
+/// filling each window's covariates from `weather`.
 pub fn train_test_splits(
     data: &DataFrame,
     options: &Options,
@@ -163,7 +180,9 @@ pub fn train_test_splits(
     options.validate()?;
     data.require(cols::LOCATION)?;
     data.require(cols::DISEASE_CASES)?;
-    let panel = Panel::new(data)?;
+    let prepared = prepare(data, &options.prepare)?;
+    let data = &prepared;
+    let panel = Panel::new(data, options.prepare.fill_gaps)?;
     let n = panel.periods.len();
     let window = options.window();
     let Some(split_idx) = n.checked_sub(window + 1) else {

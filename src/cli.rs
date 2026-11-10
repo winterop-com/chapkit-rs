@@ -113,6 +113,12 @@ pub struct EvalArgs {
     /// Future weather (observed looks ahead)
     #[arg(long, value_enum, default_value_t)]
     pub weather: Weather,
+    /// Keep gaps in a location's periods
+    #[arg(long)]
+    pub keep_gaps: bool,
+    /// Do not pad locations to the full range
+    #[arg(long)]
+    pub no_pad: bool,
     /// Generated locations
     #[arg(long, default_value_t = 5)]
     pub locations: usize,
@@ -278,6 +284,7 @@ mod tests {
         assert_eq!((e.periods, e.splits, e.stride, e.retrain), (3, 7, 1, 1));
         assert_eq!(e.weather, Weather::Climatology);
         assert_eq!(e.data, None);
+        assert!(!e.keep_gaps && !e.no_pad);
         let Command::Eval(e) = parse(&[
             "bin",
             "eval",
@@ -296,6 +303,13 @@ mod tests {
         assert_eq!(e.data, Some(PathBuf::from("d.csv")));
         assert_eq!((e.weather.id(), e.retrain), ("observed", 2));
         assert!(parse(&["bin", "eval", "--weather", "mstl"]).is_err());
+        let Command::Eval(e) = parse(&["bin", "eval", "--keep-gaps", "--no-pad"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected eval")
+        };
+        assert!(e.keep_gaps && e.no_pad);
     }
 
     #[test]

@@ -20,7 +20,9 @@ pub struct MaskedRange {
 }
 
 /// `data` with `disease_cases` nulled inside the ranges and the indicator added (as a float column,
-/// after the others). Without ranges, `data` is returned unchanged, with no indicator.
+/// after the others). Without ranges, `data` is returned unchanged, with no indicator. Mask prepared
+/// data ([`prepare`](crate::prepare())), as chap-core masks after padding: a backtest prepares it
+/// again, which leaves prepared data as it is, but rows filled after masking get no indicator.
 pub fn mask_target(data: &DataFrame, ranges: &[MaskedRange]) -> Result<DataFrame> {
     if ranges.is_empty() {
         return Ok(data.clone());

@@ -45,13 +45,15 @@ RMSE 134.08000750558756). The options are in the [command reference](../referenc
 
 A dataset is a CSV file or chapkit's JSON (`{columns, data}`) with `time_period`, `location`,
 `disease_cases` and the covariates, as chap-core reads them. The model's default configuration is used.
+It is prepared as chap-core prepares it ([Preparation](#preparation)); `--keep-gaps` and `--no-pad` turn
+parts of that off, and the first line of the output says so.
 
 ## From Rust
 
 ```rust,ignore
 use chapkit::eval::{Climatology, Options, backtest_model};
 
-let options = Options { periods: 3, splits: 7, stride: 1, retrain: 1 }; // chap-core's defaults
+let options = Options::default(); // chap-core's: 3 periods, 7 splits, stride 1, 1 training, its preparation
 let backtest = backtest_model(&model, &config, &data, &options, &Climatology)?;
 let scores = backtest.score(&data)?;
 println!("CRPS {}", scores.get(chapkit::eval::Metric::Crps));
@@ -61,6 +63,28 @@ println!("CRPS {}", scores.get(chapkit::eval::Metric::Crps));
 forecasts. Trainings run in parallel, then every split's forecast.
 
 ## What it does
+
+**Preparation**, as chap-core's REST API loads every dataset (`DataSet.from_pandas(df, fill_missing=True)`):
+
+1. Rows are grouped by location (locations sorted; a numeric location becomes text) and each location's
+   rows are sorted by period.
+2. A period twice in one location is an error naming both, always.
+3. Gaps inside a location's series are filled with rows whose values are all missing.
+4. Every location is padded with such rows to the dataset's first and last period, so all locations share
+   one contiguous period range; a period missing for every location is filled too.
+
+Filled numeric columns become floats. A text column that would need filling is an error, as it is in
+chap-core. The period range is then contiguous, so a horizon counts periods, and a model sees missing rows
+where chap-core's would: a model counting the periods since the last observation (chap-core's persistence)
+gives chap-core's forecasts only with filling on.
+
+| option (`Prepare`, `eval` flag) | default | off |
+|---|---|---|
+| `fill_gaps`, `--keep-gaps` | fill gaps (chap-core) | keep the rows as given; the periods are those that occur in the data |
+| `pad`, `--no-pad` | pad to the full range (chap-core) | each location keeps its own first and last period |
+
+`chapkit::eval::prepare` is the step on its own; a backtest runs it before splitting. Sunday-start weeks
+cannot be filled or padded yet.
 
 **Splits** (chap-core's `train_test_generator`). With `n` periods, the first training uses every period
 up to index `n - (periods + (splits - 1) * stride + 1)`; split `i` has the history up to `stride * i`
@@ -90,18 +114,20 @@ uses the test windows only), and RMSE by horizon or location is the root mean sq
 
 **Target masking** (`chapkit::eval::mask_target`): inside masked ranges `disease_cases` is hidden and
 `target_masked` is 1; the window's future has it at 0, and a masked period inside the evaluation window is
-an error, as in chap-core. Not yet on the command line.
+an error, as in chap-core. Mask prepared data, as chap-core masks after padding. Not yet on the command line.
 
 **Checks**, as chap-core's: every observed location and period of a window needs a forecast with finite
-samples, there must be more periods than the windows cover, and `retrain` cannot exceed `splits`. Periods are
-assumed contiguous: a horizon is the position in the dataset's sorted periods.
+samples, there must be more periods than the windows cover, and `retrain` cannot exceed `splits`. With
+`--keep-gaps` the periods are those in the data, and a horizon is the position among them.
 
 ## Parity
 
 `scripts/gen_eval_fixtures.py` runs chap-core's own `train_test_generator`, `backtest` (with retraining)
-and metrics on three generated datasets (monthly, weekly across ISO week 53, and monthly with a masked
-range), with a missing and a zero target in the evaluation window and a covariate never observed in one
-season. It writes `crates/chapkit-eval/fixtures/eval_<case>.json`; the data comes from a fixed seed, so a
+and metrics on five generated datasets (monthly, weekly across ISO week 53, monthly with a masked range,
+and two messy ones), with a missing and a zero target in the evaluation window and a covariate never
+observed in one season. The messy datasets, monthly and weekly, have a gap inside one location (in the
+weekly one across 2020W53), a location starting late and one ending early, a period missing for every
+location, and their rows shuffled; chap-core loads every dataset with `fill_missing=True`. It writes `crates/chapkit-eval/fixtures/eval_<case>.json`; the data comes from a fixed seed, so a
 rerun with the same chap-core release gives the same files:
 
 ```sh
@@ -112,10 +138,14 @@ The tests in `crates/chapkit-eval/tests/parity.rs` check, for each case:
 
 | check | tolerance | largest difference seen |
 |---|---|---|
+| the prepared dataset, row for row | exact | 0 |
 | every split's windows (train end, history end, forecast periods) | exact | - |
-| the future frame from both providers | 1e-9 relative | 1.1e-15 |
-| every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and a test model | 1e-12 relative | 1.4e-15 |
-| a whole backtest of the test model (repeated in Rust): forecasts and metrics | 1e-12 relative | 3.2e-16 |
+| the future frame from both providers | 1e-9 relative | 1.2e-15 |
+| every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and two test models | 1e-12 relative | 1.4e-15 |
+| whole backtests of the two test models (repeated in Rust; one counts periods since the last observation): forecasts and metrics | 1e-12 relative | 5.0e-16 |
+
+A duplicate row is rejected, and with `--keep-gaps --no-pad` the periods-since-last-observation model no
+longer matches chap-core (a test pins both).
 
 The remaining differences are summation order (numpy sums pairwise).
 

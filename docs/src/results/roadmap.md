@@ -15,8 +15,8 @@ Next:
   under a second; in-process it is a matter of milliseconds, which is also what hyperparameter search needs.
   - Done: a pure crate with chap-core 2.7.0's splitter (`train_test_generator`, with retraining), the
     metrics (CRPS and its log and normalised forms, MAE, RMSE, MAPE, coverage, Winkler, ratio above truth;
-    aggregate, by horizon and by location), the observed and climatology weather providers, and target
-    masking; parity with fixtures chap-core generates (`make eval-fixtures`), to 1e-12; `<bin> eval` on a
+    aggregate, by horizon and by location), the observed and climatology weather providers, target
+    masking, and chap-core's dataset preparation (`fill_missing=True`: gaps filled, locations padded); parity with fixtures chap-core generates (`make eval-fixtures`), to 1e-12; `<bin> eval` on a
     CSV or JSON dataset or generated data.
   - Next: chap-core's other weather providers (damped persistence, MSTL + ARIMA); target masking on the
     command line; a Rust-only `$backtest` job endpoint, like `$explain`; checkpoint provenance (splits that

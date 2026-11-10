@@ -23,12 +23,22 @@ cargo --version        # cargo 1.99 or newer
 
 ## 2. Install the chapkit-rs command
 
+Each release on [GitHub](https://github.com/winterop-com/chapkit-rs/releases) has the command for Linux (static,
+amd64 and arm64) and macOS (Apple Silicon and Intel). For example, on an Apple Silicon Mac:
+
 ```sh
-cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
+curl -sL https://github.com/winterop-com/chapkit-rs/releases/latest/download/chapkit-rs-aarch64-apple-darwin.tar.gz | tar xz
+install chapkit-rs-*/chapkit-rs ~/.local/bin/
 chapkit-rs --version
 ```
 
-This builds the command from source and puts it in `~/.cargo/bin`.
+The other archives are `chapkit-rs-x86_64-apple-darwin`, `chapkit-rs-x86_64-unknown-linux-musl` and
+`chapkit-rs-aarch64-unknown-linux-musl`; `SHA256SUMS` beside them checks a download. To build a release from source
+instead (into `~/.cargo/bin`):
+
+```sh
+cargo install --git https://github.com/winterop-com/chapkit-rs --tag v0.2.0 chapkit-cli
+```
 
 ## If something goes wrong
 

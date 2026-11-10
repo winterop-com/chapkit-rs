@@ -2,10 +2,10 @@
 
 Measured 2026-11-09 on an Apple Silicon laptop. All numbers come from scripts in `chapkit-rs-models`:
 `bench/run.py` (HTTP, real processes on localhost), `bench/builtin_inprocess.py` (chap-core's built-in
-baseline in Python) and `make bench` (criterion, the Rust model in-process).
+baseline in Python) and `make bench` (criterion, the chapkit-rs model in-process).
 
 The model is the same everywhere: chap-core's `global_median` baseline. Python chapkit serves a numpy
-version of it (`bench/python_global_median`), chapkit-rs serves the Rust port, chap-core runs its
+version of it (`bench/python_global_median`), chapkit-rs serves a port of it, chap-core runs its
 built-in. The data is the same generated dataset: 20 locations x 120 months of training data (2400 rows,
 10 columns), 3 future months.
 
@@ -62,7 +62,7 @@ seconds through Python chapkit and chap-core.
 | seasonal_median train / predict | | 440 µs / 38 µs |
 | seasonal_shift_persistence train / predict | | 731 µs / 335 µs |
 
-Even against chap-core's vectorised numpy with no HTTP at all, the Rust model is 6 to 10 times faster.
+Even against chap-core's vectorised numpy with no HTTP at all, the chapkit-rs model is 6 to 10 times faster.
 This is the cost explainers and search pay per evaluation when they run inside the service
 (`$explain`).
 
@@ -70,23 +70,25 @@ This is the cost explainers and search pay per evaluation when they run inside t
 
 The full study is in the `chapkit-rs-models` book (*Performance*), from 100 to 100,000 locations and up to 5,000
 periods, with CPU time, cores used and peak memory; `make bench-scale` there repeats it. In short, model only,
-chap-core's built-in baselines against the Rust ports on identical data:
+chap-core's built-in baselines (chap-core 2.7.0, run 2026-11-10) against the chapkit-rs ports on identical
+data:
 
-| at 100,000 locations x 120 months | chap-core | Rust, 1 core | Rust, all cores | chap-core peak | Rust peak |
+| at 100,000 locations x 120 months | chap-core | chapkit-rs, 1 core | chapkit-rs, all cores | chap-core peak | chapkit-rs peak |
 |---|---|---|---|---|---|
-| global median | 4.8 s | 0.74 s | 0.60 s | 3.7 GB | 1.8 GB |
-| seasonal median | 32.6 s | 1.7 s | 0.95 s | 4.2 GB | 3.3 GB |
-| seasonal shift persistence | 38.0 s | 3.5 s | 1.1 s | 7.8 GB | 5.2 GB |
+| global median | 4.6 s | 0.69 s | 0.60 s | 3.3 GB | 1.8 GB |
+| persistence | 17.3 s | 1.8 s | 0.75 s | 5.0 GB | 2.1 GB |
+| seasonal median | 31.5 s | 1.7 s | 0.89 s | 4.2 GB | 3.2 GB |
+| seasonal shift persistence | 36.6 s | 3.5 s | 1.2 s | 7.0 GB | 5.3 GB |
 
-- Across all sizes the ports are 2.7 to 25 times faster on one core (chap-core uses one), 3.6 to 35 times on all
+- Across all sizes the ports are 2.2 to 24 times faster on one core (chap-core uses one), 3.7 to 36 times on all
   cores, and use less memory at every size. Both scale linearly, so the factor holds at facility-level counts.
-- Every forecast sample is the same as chap-core's (`make bench-compare`): the medians bit for bit, seasonal
-  shift persistence within 3.5e-16.
-- chap-core also spends 47 s converting the 100,000-location data to its `DataSet`; chapkit-rs decodes the same
-  data from JSON in 1.8 s. That is context, not a speedup to add: chap-core still prepares and serializes data
+- Every forecast sample is the same as chap-core's (`make bench-compare`), bit for bit, for all four models
+  (since the models' 1.0.3).
+- chap-core also spends 45 to 46 s converting the 100,000-location data to its `DataSet`; chapkit-rs decodes the
+  same data from JSON in 1.7 s. That is context, not a speedup to add: chap-core still prepares and serializes data
   when it calls a service.
 - At that size the request is 589 MB of JSON in chapkit's row format, and decoding it takes longer than any of
-  the models. At facility level the wire format is the next bottleneck.
+  the models on all cores. At facility level the wire format is the next bottleneck.
 
 What made the library side fast: a streaming JSON decoder that writes cells straight into typed columns, string
 columns stored as codes into a dictionary of distinct values (grouping becomes integer bucketing), a fast path

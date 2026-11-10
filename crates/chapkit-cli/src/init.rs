@@ -76,10 +76,14 @@ struct Wiring {
 
 fn wiring(dir: &Path, chapkit_path: Option<&Path>) -> Result<Wiring, String> {
     let Some(chapkit) = chapkit_path else {
-        // From git: the package alone is the build context.
+        // From git, pinned to the release of this command, so a package builds the same library until
+        // its author moves the tag on. The package alone is the build context.
         return Ok(Wiring {
             from_git: true,
-            dependency: format!("chapkit = {{ git = \"{CHAPKIT_GIT}\" }}"),
+            dependency: format!(
+                "chapkit = {{ git = \"{CHAPKIT_GIT}\", tag = \"v{}\" }}",
+                env!("CARGO_PKG_VERSION")
+            ),
             docker_context: ".".into(),
             dockerfile: "Dockerfile".into(),
             docker_workspace: ".".into(),
@@ -246,7 +250,10 @@ mod tests {
         }
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default();
         assert!(cargo.contains("name = \"my-model\""));
-        assert!(cargo.contains("chapkit = { git = "));
+        assert!(cargo.contains(&format!(
+            "chapkit = {{ git = \"{CHAPKIT_GIT}\", tag = \"v{}\" }}",
+            env!("CARGO_PKG_VERSION")
+        )));
         let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap_or_default();
         assert!(lib.contains("pub struct MyModel;"));
         assert!(!lib.contains("{{"), "unfilled placeholder");

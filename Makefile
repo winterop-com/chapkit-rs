@@ -1,4 +1,4 @@
-.PHONY: help install check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi eval-fixtures models-check models-release clean
+.PHONY: help install release-tag check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi eval-fixtures models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
 CHAP_CORE ?= ../../chap-core
@@ -14,6 +14,7 @@ help:
 	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
 	@echo "  build     Build the workspace, tests and benches (debug)"
 	@echo "  release   The chapkit-rs command into ./bin, universal on macOS"
+	@echo "  release-tag  Bump the version, check, commit and tag (VERSION=x.y.z, PUSH=1 to push)"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
 	@echo "  test      Run all tests"
@@ -39,6 +40,12 @@ install: release
 	else ln -sf chapkit-rs $(PREFIX)/bin/crs && echo "installed $(PREFIX)/bin/chapkit-rs, and $(PREFIX)/bin/crs as its short form"; fi
 
 check: lint test
+
+# Bump the version, run the checks, commit and tag (as chap-devops does). Pushing the tag starts the release
+# workflow, which builds the chapkit-rs archives and creates the GitHub release.
+release-tag:
+	@test -n "$(VERSION)" || { echo "usage: make release-tag VERSION=x.y.z [PUSH=1]"; exit 2; }
+	@MAKE="$(MAKE)" scripts/release.sh $(VERSION) $(if $(PUSH),--push,)
 
 test-polars:
 	@cargo clippy -p chapkit-dataframe --features polars --all-targets -- -D warnings

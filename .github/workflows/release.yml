@@ -1,0 +1,95 @@
+name: Release
+run-name: release ${{ github.ref_type == 'tag' && github.ref_name || 'check (no publish)' }}
+
+# Builds the `chapkit-rs` command for Linux (static musl, amd64 and arm64) and macOS (Apple Silicon and Intel),
+# and attaches the archives and their SHA256SUMS to a GitHub release. `make release-tag VERSION=x.y.z PUSH=1`
+# pushes the tag that starts it. A manual run builds the archives without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every target builds natively. Linux builds run in Rust's Alpine image, whose toolchain links
+          # statically, as the model images do; JavaScript actions cannot run inside Alpine on arm runners,
+          # so the build runs through `docker run`.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build (Linux, static)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src rust:1.99-alpine \
+            sh -c 'apk add --no-cache musl-dev >/dev/null && cargo build --release --locked -p chapkit-cli'
+          mkdir -p out && cp target/release/chapkit-rs out/
+          file out/chapkit-rs
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --locked -p chapkit-cli
+          mkdir -p out && cp target/release/chapkit-rs out/
+      - name: Package
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/*) version="$GITHUB_REF_NAME" ;;
+            *) version="dev-${GITHUB_SHA:0:7}" ;;
+          esac
+          out/chapkit-rs --version
+          # One archive name per target, so releases/latest/download/<name> works; the folder inside
+          # keeps the version.
+          dir="chapkit-rs-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$dir"
+          cp out/chapkit-rs README.md "dist/$dir/"
+          tar -czf "dist/chapkit-rs-${{ matrix.target }}.tar.gz" -C dist "$dir"
+          rm -rf "dist/$dir"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chapkit-rs-${{ matrix.target }}
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: chapkit-rs-*
+          merge-multiple: true
+          path: dist
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" --title "chapkit-rs $GITHUB_REF_NAME" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

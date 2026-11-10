@@ -14,11 +14,14 @@ name = "my-model"
 edition = "2024"
 
 [dependencies]
-chapkit = { path = "../chapkit-rs" }
+chapkit = { git = "https://github.com/winterop-com/chapkit-rs", tag = "v0.2.0" }
 serde = { version = "1", features = ["derive"] }
 schemars = "1"
 tokio = { version = "1", features = ["full"] }
 ```
+
+`chapkit-rs init` writes the dependency pinned to the tag of its own release. To move to a newer release, change the
+tag; with a chapkit-rs checkout beside the package, `chapkit = { path = "../chapkit-rs" }` builds against it instead.
 
 ## The model
 

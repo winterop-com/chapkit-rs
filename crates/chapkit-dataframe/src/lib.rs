@@ -9,6 +9,7 @@ mod decode;
 mod frame;
 #[cfg(feature = "polars")]
 mod polars_conv;
+mod strings;
 
 /// The polars crate this conversion is built against (feature `polars`).
 #[cfg(feature = "polars")]
@@ -16,6 +17,7 @@ pub use polars;
 
 pub use column::{Column, DType};
 pub use frame::{DataFrame, FrameError};
+pub use strings::{NULL as NULL_CODE, StrBuilder, StrColumn};
 
 /// Well-known chapkit column names.
 pub mod cols {

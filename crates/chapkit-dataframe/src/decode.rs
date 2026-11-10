@@ -16,8 +16,11 @@ use serde_json::{Number, Value};
 
 use crate::column::{Column, DType};
 use crate::frame::{DataFrame, FrameError, WireSchema};
+use crate::strings::StrBuilder;
 
-/// One decoded cell. Scalars avoid `Value`'s allocation; arrays and objects keep it.
+/// One decoded cell. Scalars avoid `Value`'s allocation; arrays and objects keep it. Strings are
+/// normally handed to the column builder straight from the parser (see [`CellSeed`]); `Str` only
+/// occurs for strings inside rebuilt values.
 enum Cell {
     Null,
     Bool(bool),
@@ -26,82 +29,48 @@ enum Cell {
     Other(Value),
 }
 
-impl<'de> Deserialize<'de> for Cell {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(CellVisitor)
-    }
-}
-
-struct CellVisitor;
-
-impl<'de> Visitor<'de> for CellVisitor {
-    type Value = Cell;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a JSON value")
-    }
-    fn visit_unit<E>(self) -> Result<Cell, E> {
-        Ok(Cell::Null)
-    }
-    fn visit_none<E>(self) -> Result<Cell, E> {
-        Ok(Cell::Null)
-    }
-    fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Cell, D::Error> {
-        Cell::deserialize(d)
-    }
-    fn visit_bool<E>(self, v: bool) -> Result<Cell, E> {
-        Ok(Cell::Bool(v))
-    }
-    fn visit_i64<E>(self, v: i64) -> Result<Cell, E> {
-        Ok(Cell::Num(v.into()))
-    }
-    fn visit_u64<E>(self, v: u64) -> Result<Cell, E> {
-        Ok(Cell::Num(v.into()))
-    }
-    fn visit_f64<E>(self, v: f64) -> Result<Cell, E> {
-        Ok(Number::from_f64(v).map_or(Cell::Null, Cell::Num))
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Cell, E> {
-        Ok(Cell::Str(v.to_owned()))
-    }
-    fn visit_string<E>(self, v: String) -> Result<Cell, E> {
-        Ok(Cell::Str(v))
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Cell, A::Error> {
-        Value::deserialize(de::value::SeqAccessDeserializer::new(seq)).map(Cell::Other)
-    }
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Cell, A::Error> {
-        // With serde_json's `arbitrary_precision` feature, numbers arrive as a special map;
-        // rebuilding the `Value` turns them back into numbers.
-        Value::deserialize(de::value::MapAccessDeserializer::new(map)).map(Cell::from_value)
-    }
-}
-
 /// A column being built. Starts `Empty` (only nulls so far) and settles on a type.
 enum Builder {
     Empty(usize),
     Num(Vec<Option<Number>>),
-    Str(Vec<Option<String>>),
+    Str(StrBuilder),
     Bool(Vec<Option<bool>>),
     Json(Vec<Value>),
 }
 
 impl Builder {
+    /// Push a string without allocating: interned into the column's dictionary.
+    fn push_str(&mut self, s: &str) {
+        match self {
+            Builder::Str(b) => b.push(Some(s)),
+            Builder::Json(v) => v.push(Value::String(s.to_owned())),
+            Builder::Empty(n) => {
+                let mut b = StrBuilder::with_nulls(*n);
+                b.push(Some(s));
+                *self = Builder::Str(b);
+            }
+            _ => {
+                let mut v = std::mem::replace(self, Builder::Empty(0)).into_values();
+                v.push(Value::String(s.to_owned()));
+                *self = Builder::Json(v);
+            }
+        }
+    }
+
     fn push(&mut self, cell: Cell) {
         match (&mut *self, cell) {
             (Builder::Empty(n), Cell::Null) => *n += 1,
             (Builder::Num(v), Cell::Null) => v.push(None),
-            (Builder::Str(v), Cell::Null) => v.push(None),
+            (Builder::Str(b), Cell::Null) => b.push(None),
+            (_, Cell::Str(s)) => self.push_str(&s),
             (Builder::Bool(v), Cell::Null) => v.push(None),
             (Builder::Num(v), Cell::Num(x)) => v.push(Some(x)),
-            (Builder::Str(v), Cell::Str(x)) => v.push(Some(x)),
             (Builder::Bool(v), Cell::Bool(x)) => v.push(Some(x)),
             (Builder::Json(v), cell) => v.push(cell.into_value()),
             (Builder::Empty(n), cell) => {
                 let n = *n;
                 *self = match cell {
                     Cell::Num(x) => Builder::Num(nulls_then(n, x)),
-                    Cell::Str(x) => Builder::Str(nulls_then(n, x)),
                     Cell::Bool(x) => Builder::Bool(nulls_then(n, x)),
                     other => {
                         let mut v = vec![Value::Null; n];
@@ -125,9 +94,9 @@ impl Builder {
                 .into_iter()
                 .map(|x| x.map_or(Value::Null, Value::Number))
                 .collect(),
-            Builder::Str(v) => v
-                .into_iter()
-                .map(|x| x.map_or(Value::Null, Value::String))
+            Builder::Str(b) => b
+                .iter()
+                .map(|x| x.map_or(Value::Null, |s| Value::String(s.to_owned())))
                 .collect(),
             Builder::Bool(v) => v
                 .into_iter()
@@ -160,8 +129,10 @@ impl Builder {
                     .map(|x| x.as_ref().and_then(Number::as_f64))
                     .collect(),
             ),
-            (None | Some(DType::String), Builder::Str(v)) => Column::Str(v),
-            (Some(DType::String), Builder::Empty(n)) => Column::Str(vec![None; n]),
+            (None | Some(DType::String), Builder::Str(b)) => Column::Str(b.finish()),
+            (Some(DType::String), Builder::Empty(n)) => {
+                Column::Str(StrBuilder::with_nulls(n).finish())
+            }
             (None | Some(DType::Boolean), Builder::Bool(v)) => Column::Bool(v),
             (Some(DType::Boolean), Builder::Empty(n)) => Column::Bool(vec![None; n]),
             (None, Builder::Json(v)) => Column::Json(v),
@@ -196,6 +167,78 @@ impl Cell {
             Cell::Num(n) => Value::Number(n),
             Cell::Str(s) => Value::String(s),
             Cell::Other(v) => v,
+        }
+    }
+}
+
+/// Seed for one cell: decodes it straight into its column's builder (`None` for cells beyond
+/// the frame's width, which are only counted).
+struct CellSeed<'a>(Option<&'a mut Builder>);
+
+impl<'de> DeserializeSeed<'de> for CellSeed<'_> {
+    type Value = ();
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for CellSeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_str<E>(self, v: &str) -> Result<(), E> {
+        if let Some(b) = self.0 {
+            b.push_str(v);
+        }
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        self.store(Cell::Null);
+        Ok(())
+    }
+    fn visit_none<E>(self) -> Result<(), E> {
+        self.store(Cell::Null);
+        Ok(())
+    }
+    fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+    fn visit_bool<E>(self, v: bool) -> Result<(), E> {
+        self.store(Cell::Bool(v));
+        Ok(())
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<(), E> {
+        self.store(Cell::Num(v.into()));
+        Ok(())
+    }
+    fn visit_u64<E>(self, v: u64) -> Result<(), E> {
+        self.store(Cell::Num(v.into()));
+        Ok(())
+    }
+    fn visit_f64<E>(self, v: f64) -> Result<(), E> {
+        self.store(Number::from_f64(v).map_or(Cell::Null, Cell::Num));
+        Ok(())
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<(), A::Error> {
+        let v = Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+        self.store(Cell::Other(v));
+        Ok(())
+    }
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<(), A::Error> {
+        // With serde_json's `arbitrary_precision` feature, numbers arrive as a special map;
+        // rebuilding the `Value` turns them back into numbers.
+        let v = Value::deserialize(de::value::MapAccessDeserializer::new(map))?;
+        self.store(Cell::from_value(v));
+        Ok(())
+    }
+}
+
+impl CellSeed<'_> {
+    fn store(self, cell: Cell) {
+        if let Some(b) = self.0 {
+            b.push(cell);
         }
     }
 }
@@ -272,13 +315,20 @@ impl<'de> Visitor<'de> for RowSeed<'_> {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<usize, A::Error> {
         let mut i = 0;
-        while let Some(cell) = seq.next_element::<Cell>()? {
+        loop {
             if self.first && i >= self.builders.len() {
-                self.builders.push(Builder::Empty(0));
-            }
-            // Extra cells are counted (and reported as a width error) but not stored.
-            if let Some(b) = self.builders.get_mut(i) {
-                b.push(cell);
+                // Only grow if there really is another cell.
+                let mut probe = Builder::Empty(0);
+                if seq.next_element_seed(CellSeed(Some(&mut probe)))?.is_none() {
+                    break;
+                }
+                self.builders.push(probe);
+            } else if seq
+                .next_element_seed(CellSeed(self.builders.get_mut(i)))?
+                .is_none()
+            {
+                // Extra cells are counted (and reported as a width error) but not stored.
+                break;
             }
             i += 1;
         }

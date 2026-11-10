@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::strings::StrColumn;
+
 /// Logical column type, mirroring the chapkit DataFrame schema field types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
@@ -46,8 +48,8 @@ pub enum Column {
     Float(Vec<Option<f64>>),
     /// Integer values.
     Int(Vec<Option<i64>>),
-    /// String values.
-    Str(Vec<Option<String>>),
+    /// String values, dictionary-encoded (see [`StrColumn`]).
+    Str(StrColumn),
     /// Boolean values.
     Bool(Vec<Option<bool>>),
     /// Arbitrary JSON values (mixed or nested content).
@@ -110,7 +112,7 @@ impl Column {
     /// Value at `row` as `&str`, if this is a string column and the value is present and in range.
     pub fn str_at(&self, row: usize) -> Option<&str> {
         match self {
-            Column::Str(v) => v.get(row).and_then(Option::as_deref),
+            Column::Str(v) => v.get(row),
             Column::Json(v) => v.get(row).and_then(Value::as_str),
             _ => None,
         }
@@ -132,9 +134,7 @@ impl Column {
                 .map_or(Value::Null, Value::from),
             Column::Str(v) => v
                 .get(row)
-                .cloned()
-                .flatten()
-                .map_or(Value::Null, Value::String),
+                .map_or(Value::Null, |s| Value::String(s.to_owned())),
             Column::Bool(v) => v
                 .get(row)
                 .copied()
@@ -167,7 +167,7 @@ impl Column {
         Some(match self {
             Column::Float(v) => Column::Float(pick(v, idx)?),
             Column::Int(v) => Column::Int(pick(v, idx)?),
-            Column::Str(v) => Column::Str(pick(v, idx)?),
+            Column::Str(v) => Column::Str(v.take(idx)?),
             Column::Bool(v) => Column::Bool(pick(v, idx)?),
             Column::Json(v) => Column::Json(pick(v, idx)?),
         })
@@ -179,7 +179,7 @@ impl Column {
         match (&mut *self, other) {
             (Column::Float(a), Column::Float(b)) => a.extend_from_slice(b),
             (Column::Int(a), Column::Int(b)) => a.extend_from_slice(b),
-            (Column::Str(a), Column::Str(b)) => a.extend_from_slice(b),
+            (Column::Str(a), Column::Str(b)) => a.append(b),
             (Column::Bool(a), Column::Bool(b)) => a.extend_from_slice(b),
             (Column::Json(a), _) => a.extend((0..other.len()).map(|i| other.json_at(i))),
             (Column::Float(a), Column::Int(b)) => a.extend(b.iter().map(|x| x.map(|x| x as f64))),

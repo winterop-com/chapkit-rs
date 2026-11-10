@@ -33,7 +33,7 @@ impl DataFrame {
                     Column::Int(v) => Series::new(name, v.as_slice()),
                     Column::Bool(v) => Series::new(name, v.as_slice()),
                     Column::Str(v) => {
-                        let refs: Vec<Option<&str>> = v.iter().map(Option::as_deref).collect();
+                        let refs: Vec<Option<&str>> = v.iter().collect();
                         Series::new(name, refs)
                     }
                     Column::Json(v) => {

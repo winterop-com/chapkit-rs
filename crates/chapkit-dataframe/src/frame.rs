@@ -247,30 +247,29 @@ impl DataFrame {
         let col = self.require(key)?;
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         // String columns (the usual case) borrow their keys: one allocation per group, not per row.
+        // String columns (the usual case) are dictionary-encoded: group by code, no hashing.
         if let Column::Str(values) = col {
-            let mut pos: HashMap<&str, usize> = HashMap::new();
-            // Chap data usually arrives sorted by location: a row with the same key as the one
-            // before joins the same group without hashing.
-            let mut last: Option<(&str, usize)> = None;
-            for (row, v) in values.iter().enumerate() {
-                let k = v.as_deref().unwrap_or_default();
-                if let Some((lk, i)) = last
-                    && lk == k
-                {
-                    if let Some(group) = order.get_mut(i) {
-                        group.1.push(row);
-                    }
-                    continue;
-                }
-                if let Some(&i) = pos.get(k) {
-                    last = Some((k, i));
-                    if let Some(group) = order.get_mut(i) {
-                        group.1.push(row);
-                    }
+            let dict = values.dict();
+            // A missing value groups with "" (as JSON null did before), if "" occurs at all.
+            let empty = dict.iter().position(String::is_empty);
+            // Group index per dictionary code, plus one slot for missing values; u32::MAX = none yet.
+            let mut group_of = vec![u32::MAX; dict.len() + 1];
+            for (row, &code) in values.codes().iter().enumerate() {
+                let slot = if code == crate::strings::NULL {
+                    empty.unwrap_or(dict.len())
                 } else {
-                    last = Some((k, order.len()));
-                    pos.insert(k, order.len());
-                    order.push((k.to_owned(), vec![row]));
+                    code as usize
+                };
+                let Some(g) = group_of.get_mut(slot) else {
+                    continue;
+                };
+                if *g == u32::MAX {
+                    *g = u32::try_from(order.len()).unwrap_or(u32::MAX - 1);
+                    let key = dict.get(slot).cloned().unwrap_or_default();
+                    order.push((key, Vec::new()));
+                }
+                if let Some(group) = order.get_mut(*g as usize) {
+                    group.1.push(row);
                 }
             }
             return Ok(order);
@@ -445,10 +444,15 @@ impl Serialize for Cell<'_> {
                 Some(x) => s.serialize_i64(*x),
                 None => s.serialize_none(),
             },
-            Column::Str(v) => match v.get(row).ok_or_else(missing)? {
-                Some(x) => s.serialize_str(x),
-                None => s.serialize_none(),
-            },
+            Column::Str(v) => {
+                if row >= v.len() {
+                    return Err(missing());
+                }
+                match v.get(row) {
+                    Some(x) => s.serialize_str(x),
+                    None => s.serialize_none(),
+                }
+            }
             Column::Bool(v) => match v.get(row).ok_or_else(missing)? {
                 Some(x) => s.serialize_bool(*x),
                 None => s.serialize_none(),

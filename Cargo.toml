@@ -37,6 +37,8 @@ ulid.workspace = true
 default = []
 # turso storage backend (DATABASE_URL=turso:///path).
 turso = ["chapkit-store/turso"]
+# DataFrame::to_polars / from_polars, and chapkit::polars re-exported.
+polars = ["chapkit-dataframe/polars"]
 
 [lints]
 workspace = true
@@ -53,6 +55,7 @@ publish = false
 
 [workspace.dependencies]
 chapkit-dataframe = { path = "crates/chapkit-dataframe" }
+polars = { version = "0.55", default-features = false }
 chapkit-core = { path = "crates/chapkit-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

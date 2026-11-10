@@ -66,6 +66,55 @@ Even against chap-core's vectorised numpy with no HTTP at all, the Rust model is
 This is the cost explainers and search pay per evaluation when they run inside the service
 (`$explain`).
 
+## Scaling with locations and periods
+
+`make bench-scale` in `chapkit-rs-models` runs chap-core's three built-in baselines and the Rust ports
+in-process on identical generated monthly data, one process per size, one core each (neither side is
+parallel). Milliseconds; "convert" is chap-core turning pandas into its `DataSet` before calling the model,
+"decode" is chapkit-rs parsing the same data from JSON when it arrives over HTTP.
+
+global_median:
+
+| locations x periods | rows | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
+|---|---|---|---|---|---|
+| 500 x 120 | 60,000 | 234 | 23 | 11 | 4.2 |
+| 1000 x 120 | 120,000 | 472 | 45 | 27 | 9.1 |
+| 2000 x 120 | 240,000 | 929 | 90 | 52 | 19 |
+| 5000 x 120 | 600,000 | 2,283 | 221 | 138 | 48 |
+| 100 x 5000 | 500,000 | 399 | 15 | 113 | 17 |
+| 2000 x 2000 | 4,000,000 | 2,106 | 140 | 855 | 152 |
+
+seasonal_median:
+
+| locations x periods | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
+|---|---|---|---|---|
+| 500 x 120 | 223 | 152 | 11 | 13 |
+| 5000 x 120 | 2,243 | 1,538 | 136 | 142 |
+| 100 x 5000 | 399 | 99 | 114 | 73 |
+| 2000 x 2000 | 2,128 | 1,182 | 862 | 624 |
+
+seasonal_shift_persistence:
+
+| locations x periods | chap-core convert | chap-core train + predict | chapkit-rs decode | chapkit-rs train + predict |
+|---|---|---|---|---|
+| 500 x 120 | 232 | 169 | 13 | 26 |
+| 5000 x 120 | 2,253 | 1,732 | 147 | 461 |
+| 100 x 5000 | 432 | 174 | 113 | 144 |
+| 2000 x 2000 | 2,125 | 1,706 | 894 | 1,269 |
+
+What this shows:
+
+- **Both scale linearly.** At these sizes neither side blows up: time grows in proportion to rows.
+- **Many locations favour Rust**, 4 to 12 times on the model calls. Long histories with few locations do
+  not: at 100 x 5000 global_median is about even, since numpy's per-location work is already vectorised.
+- **chap-core's pandas-to-`DataSet` conversion costs more than the models themselves**, up to 2.3 s at
+  5000 locations; chapkit-rs's JSON decode of the same data is about 16 times cheaper.
+- **Peak memory** at 4 million rows, model alone: global_median 0.7 GB in Rust and 1.2 GB in chap-core;
+  seasonal_shift_persistence 1.9 GB and 2.1 GB. Rust stores every string cell (period, location)
+  separately; interning them is the obvious next saving.
+
+All outputs have the expected number of rows on both sides; `bench/scale_results.json` holds every run.
+
 ## Footprint
 
 | | Python chapkit | chapkit-rs |

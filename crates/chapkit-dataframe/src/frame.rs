@@ -35,6 +35,9 @@ pub enum FrameError {
     /// Frames being stacked have different column names.
     #[error("cannot stack frames with different columns")]
     ColumnMismatch,
+    /// Converting to or from another frame library failed.
+    #[error("conversion failed: {0}")]
+    Convert(String),
 }
 
 /// A small columnar table.

@@ -6,6 +6,12 @@
 
 mod column;
 mod frame;
+#[cfg(feature = "polars")]
+mod polars_conv;
+
+/// The polars crate this conversion is built against (feature `polars`).
+#[cfg(feature = "polars")]
+pub use polars;
 
 pub use column::{Column, DType};
 pub use frame::{DataFrame, FrameError};

@@ -80,6 +80,38 @@ Running the binary serves the full chapkit API on `127.0.0.1:8000`: configs, art
 `$predict`, `$validate`, `$predict-sync`, `$explain`, `$generate-sample-data`, health, info, system,
 metrics, SSE streams, OpenAPI at `/openapi.json` and docs at `/docs`.
 
+## Using polars
+
+For pandas/numpy-style work (group-by, joins, lags, rolling windows) enable the `polars` feature and
+convert at the edges of `train` and `predict`:
+
+```toml
+chapkit = { path = "../chapkit-rs", features = ["polars"] }
+polars = { version = "0.55", features = ["lazy"] }   # the polars features your model uses
+```
+
+```rust,ignore
+use chapkit::polars::prelude::*;
+
+fn train(&self, _: &Self::Config, input: TrainInput<'_>) -> chapkit::Result<Self::Trained> {
+    let df = input.data.to_polars()?;
+    let means = df
+        .lazy()
+        .group_by_stable([col("location")])
+        .agg([col("disease_cases").mean()])
+        .collect()
+        .map_err(|e| chapkit::Error::Model(e.to_string()))?;
+    // ... build Self::Trained from `means`; DataFrame::from_polars converts back.
+}
+```
+
+The chapkit `DataFrame` stays the wire type: the JSON chap-core sends is decoded into it, and predictions
+are returned as one. Numbers, integers, strings and booleans map to Float64, Int64, String and Boolean;
+from polars, other numeric widths are widened and other types become strings. Each conversion copies the
+data once, which is small next to decoding the request. polars is optional so small models, and the
+library itself, do not pay its compile time and binary size. Your crate's `polars` dependency must be the
+same minor version (`chapkit::polars` re-exports the one in use); cargo merges the features.
+
 ## Tips
 
 - **Statistical models** with nothing to store use `type Trained = ()` and do their work in `predict`

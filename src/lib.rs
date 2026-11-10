@@ -17,6 +17,9 @@ pub mod wire;
 
 pub use chapkit_core::*;
 pub use chapkit_dataframe as dataframe;
+/// polars, at the version `DataFrame::to_polars` / `from_polars` use (feature `polars`).
+#[cfg(feature = "polars")]
+pub use chapkit_dataframe::polars;
 pub use chapkit_http as http;
 pub use chapkit_store as store;
 pub use chapkit_xai as xai;

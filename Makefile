@@ -1,4 +1,4 @@
-.PHONY: help check test-turso build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
+.PHONY: help check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
 
@@ -9,6 +9,7 @@ help:
 	@echo "Targets:"
 	@echo "  check     lint + test; run before every commit"
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
+	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
 	@echo "  build     Build the workspace, tests and benches (debug)"
 	@echo "  release   Build the workspace in release mode"
 	@echo "  lint      Format and run clippy (warnings are errors)"
@@ -25,6 +26,10 @@ help:
 	@echo "  clean     Remove build output"
 
 check: lint test
+
+test-polars:
+	@cargo clippy -p chapkit-dataframe --features polars --all-targets -- -D warnings
+	@cargo test -p chapkit-dataframe --features polars
 
 test-turso:
 	@cargo test -p chapkit-store --features turso

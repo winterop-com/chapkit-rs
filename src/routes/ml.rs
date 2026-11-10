@@ -171,7 +171,7 @@ async fn explain(
                 .predict(
                     &trained,
                     &config,
-                    chapkit_core::PredictInput::new(&req.historic, future, &run, None),
+                    chapkit_core::PredictInput::new(&req.historic, future, &run, req.geo.as_ref()),
                 )
                 .map_err(|e| e.to_string())
         };
@@ -363,21 +363,19 @@ async fn validate(
         "predict" => {
             check_frame(&mut d, req.historic.as_ref(), "historic_empty", "historic");
             check_frame(&mut d, req.future.as_ref(), "future_empty", "future");
-            match req.artifact_id.as_deref() {
-                Some(aid) => match ml::load_trained(&s, aid).await {
-                    Ok((_, config, _)) => Some(config),
-                    Err(e) => {
-                        d.push(diag(
-                            "error",
-                            "training_artifact_not_found",
-                            e.message,
-                            Some("artifact_id"),
-                        ));
-                        None
-                    }
-                },
-                None => None,
-            }
+            let found = match req.artifact_id.as_deref() {
+                Some(aid) => ml::load_trained(&s, aid)
+                    .await
+                    .map(|(_, config, _)| config)
+                    .map_err(|e| ("training_artifact_not_found", e.message)),
+                None => Err((
+                    "artifact_id_missing",
+                    "artifact_id is required for a prediction".to_owned(),
+                )),
+            };
+            found
+                .map_err(|(code, msg)| d.push(diag("error", code, msg, Some("artifact_id"))))
+                .ok()
         }
         other => {
             d.push(diag(

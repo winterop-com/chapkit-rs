@@ -146,6 +146,9 @@ pub struct ExplainRequest {
     pub historic: DataFrame,
     #[schema(value_type = Object)]
     pub future: DataFrame,
+    /// Passed to every model call, as in `$predict`.
+    #[schema(value_type = Option<Object>)]
+    pub geo: Option<Geo>,
     pub run_info: Option<RunInfoIn>,
     /// Location of the cell to explain.
     pub location: String,

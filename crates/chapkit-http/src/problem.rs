@@ -18,6 +18,7 @@ pub mod types {
     pub const UNAUTHORIZED: &str = "urn:servicekit:error:unauthorized";
     pub const FORBIDDEN: &str = "urn:servicekit:error:forbidden";
     pub const BAD_REQUEST: &str = "urn:servicekit:error:bad-request";
+    pub const PAYLOAD_TOO_LARGE: &str = "urn:servicekit:error:payload-too-large";
 }
 
 /// A problem+json response body. `None` fields are omitted, extensions are
@@ -104,6 +105,16 @@ impl Problem {
     /// 400 "Bad Request".
     pub fn bad_request(detail: impl Into<String>) -> Self {
         Self::new(types::BAD_REQUEST, "Bad Request", StatusCode::BAD_REQUEST).detail(detail)
+    }
+
+    /// 413 "Payload Too Large".
+    pub fn payload_too_large(detail: impl Into<String>) -> Self {
+        Self::new(
+            types::PAYLOAD_TOO_LARGE,
+            "Payload Too Large",
+            StatusCode::PAYLOAD_TOO_LARGE,
+        )
+        .detail(detail)
     }
 
     /// 409 "Resource Conflict".

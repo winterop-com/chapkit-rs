@@ -26,9 +26,13 @@ impl Period {
                     .then_some(Period::Week { year, week, sunday });
             }
         }
+        // Byte offsets below are only safe on ASCII input.
+        if !s.is_ascii() {
+            return None;
+        }
         let (y, m) = match s.split_once('-') {
             Some((y, m)) if y.len() == 4 && m.len() == 2 => (y, m),
-            None if s.len() == 6 => (&s[..4], &s[4..]),
+            None if s.len() == 6 => (s.get(..4)?, s.get(4..)?),
             _ => return None,
         };
         let (year, month) = (year(y)?, num(m)?);
@@ -127,6 +131,11 @@ mod tests {
         assert_eq!(Period::parse("2024-13"), None);
         assert_eq!(Period::parse("2024"), None);
         assert_eq!(Period::parse("20240101"), None);
+        // Non-ASCII input whose byte length matches a period id must not panic.
+        assert_eq!(Period::parse("123é4"), None);
+        assert_eq!(Period::parse("2024é"), None);
+        assert_eq!(Period::parse("é2024-01"), None);
+        assert_eq!(Period::parse("2024Wé"), None);
     }
 
     #[test]

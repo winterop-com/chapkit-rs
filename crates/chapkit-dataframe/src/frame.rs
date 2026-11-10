@@ -115,9 +115,36 @@ impl DataFrame {
             .ok_or_else(|| FrameError::Missing(name.to_owned()))
     }
 
-    /// Mutably borrow a column by name.
-    pub fn column_mut(&mut self, name: &str) -> Option<&mut Column> {
-        self.position(name).map(|i| &mut self.columns[i])
+    /// Set one cell of a numeric column. The column becomes a float column if it was an integer
+    /// one. Fails if the column is missing or not numeric, or the row is out of range. There is no
+    /// `&mut Column` accessor: resizing a column would break the frame's row count.
+    pub fn set_f64(
+        &mut self,
+        name: &str,
+        row: usize,
+        value: Option<f64>,
+    ) -> Result<(), FrameError> {
+        let rows = self.n_rows;
+        let i = self
+            .position(name)
+            .ok_or_else(|| FrameError::Missing(name.to_owned()))?;
+        let col = self
+            .columns
+            .get_mut(i)
+            .ok_or_else(|| FrameError::Missing(name.to_owned()))?;
+        if let Column::Int(v) = col {
+            #[allow(clippy::cast_precision_loss)]
+            let widened = v.iter().map(|x| x.map(|x| x as f64)).collect();
+            *col = Column::Float(widened);
+        }
+        match col {
+            Column::Float(v) => {
+                let cell = v.get_mut(row).ok_or(FrameError::RowOutOfRange { rows })?;
+                *cell = value;
+                Ok(())
+            }
+            _ => Err(FrameError::Missing(format!("{name} (numeric)"))),
+        }
     }
 
     /// Numeric values of a column (nulls as `NaN`).
@@ -365,24 +392,25 @@ impl Serialize for Row<'_> {
 impl Serialize for Cell<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let row = self.1;
+        let missing = || serde::ser::Error::custom(format!("row {row} out of range"));
         match self.0 {
-            Column::Float(v) => match v[row] {
-                Some(x) if x.is_finite() => s.serialize_f64(x),
+            Column::Float(v) => match v.get(row).ok_or_else(missing)? {
+                Some(x) if x.is_finite() => s.serialize_f64(*x),
                 _ => s.serialize_none(),
             },
-            Column::Int(v) => match v[row] {
-                Some(x) => s.serialize_i64(x),
+            Column::Int(v) => match v.get(row).ok_or_else(missing)? {
+                Some(x) => s.serialize_i64(*x),
                 None => s.serialize_none(),
             },
-            Column::Str(v) => match &v[row] {
+            Column::Str(v) => match v.get(row).ok_or_else(missing)? {
                 Some(x) => s.serialize_str(x),
                 None => s.serialize_none(),
             },
-            Column::Bool(v) => match v[row] {
-                Some(x) => s.serialize_bool(x),
+            Column::Bool(v) => match v.get(row).ok_or_else(missing)? {
+                Some(x) => s.serialize_bool(*x),
                 None => s.serialize_none(),
             },
-            Column::Json(v) => v[row].serialize(s),
+            Column::Json(v) => v.get(row).ok_or_else(missing)?.serialize(s),
         }
     }
 }

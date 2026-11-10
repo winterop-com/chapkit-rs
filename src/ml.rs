@@ -117,12 +117,11 @@ pub(crate) async fn train(
 
     let model = state.model().clone();
     let cfg = config.data.clone();
-    let (trained, checkpoint, data) = tokio::task::spawn_blocking(move || {
+    let (trained, checkpoint, data) = chapkit_http::jobs::blocking(move || {
         let result = model.train(&cfg, TrainInput::new(&data, &run, geo.as_ref()));
         result.map(|(t, c)| (t, c, data))
     })
-    .await
-    .map_err(|e| JobError::runtime(e.to_string()))?
+    .await?
     .map_err(|e| model_error(&e))?;
 
     let checkpoint = Checkpoint {
@@ -227,11 +226,10 @@ pub(crate) async fn load_trained(
             JobError::value(format!("Training artifact {artifact_id} has no checkpoint"))
         })?;
     let model = state.model().clone();
-    let trained = tokio::task::spawn_blocking(move || {
+    let trained = chapkit_http::jobs::blocking(move || {
         Checkpoint::from_bytes(&bytes).and_then(|c| model.load(&c))
     })
-    .await
-    .map_err(|e| JobError::runtime(e.to_string()))?
+    .await?
     .map_err(|e| model_error(&e))?;
     state.cache(artifact_id.to_owned(), trained.clone());
     Ok((trained, config, artifact))
@@ -250,15 +248,14 @@ pub(crate) async fn predict_frame(
     let run = resolve_run(state, run_info, &config, Some(&future))?;
     let model = state.model().clone();
     let cfg = config.clone();
-    let out = tokio::task::spawn_blocking(move || {
+    let out = chapkit_http::jobs::blocking(move || {
         model.predict(
             &trained,
             &cfg,
             PredictInput::new(&historic, &future, &run, geo.as_ref()),
         )
     })
-    .await
-    .map_err(|e| JobError::runtime(e.to_string()))?
+    .await?
     .map_err(|e| model_error(&e))?;
     if !out.has(cols::TIME_PERIOD) || !out.has(cols::LOCATION) {
         return Err(JobError::runtime(

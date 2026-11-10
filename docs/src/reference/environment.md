@@ -7,6 +7,7 @@
 | `DATABASE_URL` | in memory | `:memory:`, a path, `sqlite:///path` or chapkit's `sqlite+aiosqlite:///path`; with the `turso` feature also `turso::memory:` or `turso:///path`. Three slashes mean a path relative to the working directory, four an absolute one (`sqlite:////var/lib/chapkit.db`), as in SQLAlchemy |
 | `CHAPKIT_EAGER_WAIT_MS` | `1000` | how long `$train`/`$predict` wait for a job before replying 202 |
 | `CHAPKIT_MAX_CONCURRENCY` | `1` | jobs running at once |
+| `CHAPKIT_MAX_BODY_MB` | `1024` | largest accepted request body; larger bodies get a 413 problem |
 | `CHAPKIT_SYNC_CONCURRENCY` | number of cores | `$predict-sync` and `$explain` calls running at once |
 | `SERVICEKIT_ORCHESTRATOR_URL` | unset | register with chap-core at this URL (`.../v2/services/$register`) |
 | `SERVICEKIT_HOST` | host name | host chap-core should call back on |

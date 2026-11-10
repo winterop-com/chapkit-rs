@@ -41,8 +41,8 @@ async fn list(
 ) -> ApiResult<ListOrPage<ConfigOut>> {
     let paging = p.resolve()?;
     let page = paging.map(|(page, size)| Page {
-        offset: u64::from((page - 1) * size),
-        limit: u64::from(size),
+        offset: chapkit_http::extract::page_offset(page, size),
+        limit: size,
     });
     let (rows, total) = s.store().list_configs(page).await.map_err(store_problem)?;
     let items: Vec<ConfigOut> = rows.into_iter().map(Into::into).collect();

@@ -501,3 +501,166 @@ async fn failed_jobs_and_problem_responses() {
         assert!(doc["paths"].get(path).is_some(), "openapi missing {path}");
     }
 }
+
+/// Needs geo to predict: fails without it, like a model with spatial smoothing.
+struct GeoModel;
+
+impl Model for GeoModel {
+    type Config = MeanConfig;
+    type Trained = f64;
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &MeanConfig, _: TrainInput<'_>) -> ModelResult<f64> {
+        Ok(1.0)
+    }
+
+    fn predict(&self, _: &f64, _: &MeanConfig, input: PredictInput<'_>) -> ModelResult<DataFrame> {
+        if input.geo.is_none() {
+            return Err(chapkit::Error::InvalidInput("geo is required".into()));
+        }
+        let rain = input.future.f64_column("rainfall")?;
+        prediction_frame(input.future, 4, |row, out| {
+            out.fill(rain.get(row).copied().unwrap_or(0.0));
+            Ok(())
+        })
+    }
+}
+
+async fn train_model(app: &Router, data: &Value) -> (StatusCode, Value) {
+    let (_, cfg, _) = call(
+        app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": format!("c{}", ulid::Ulid::generate()), "data": {}})),
+    )
+    .await;
+    let (s, sub, _) = call(
+        app,
+        "POST",
+        "/api/v1/ml/$train",
+        Some(json!({"config_id": cfg["id"], "data": data, "run_info": {"prediction_length": 3}})),
+    )
+    .await;
+    (s, sub)
+}
+
+async fn job_status(app: &Router, sub: &Value) -> Value {
+    let (_, job, _) = call(
+        app,
+        "GET",
+        &format!("/api/v1/jobs/{}", sub["job_id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    job["status"].clone()
+}
+
+#[tokio::test]
+async fn review_regressions() {
+    let app = app().await;
+    let fx = fixture();
+
+    // A non-ASCII period id used to panic in provenance and leave the job "running".
+    let mut bad = fx["train"].clone();
+    bad["data"][0][0] = json!("123é4");
+    let (s, sub) = train_model(&app, &bad).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(job_status(&app, &sub).await, "completed");
+
+    // Bodies over axum's old 2 MiB default are accepted: 50,000 training rows.
+    let rows: Vec<Value> = (0..50_000)
+        .map(|i| {
+            json!([
+                format!("{}-{:02}", 1900 + i / 12 % 120, i % 12 + 1),
+                format!("loc{}", i / 1440),
+                12.5,
+                100.0,
+                25.25,
+                123_456.0
+            ])
+        })
+        .collect();
+    let big = json!({"columns": ["time_period", "location", "disease_cases", "rainfall", "mean_temperature", "population"], "data": rows});
+    assert!(serde_json::to_vec(&big).unwrap().len() > 2 << 20);
+    let (s, sub) = train_model(&app, &big).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(job_status(&app, &sub).await, "completed");
+
+    // A configured limit answers 413, not a validation error.
+    let small = chapkit::Service::new("mean", "Mean", MeanModel)
+        .database(":memory:")
+        .max_body_bytes(1024)
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let (s, body) = train_model(&small, &big).await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(body["type"], "urn:servicekit:error:payload-too-large");
+
+    // $validate: a prediction without artifact_id is not valid.
+    let (s, v, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$validate",
+        Some(json!({"type": "predict", "historic": fx["historic"], "future": fx["future"]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["valid"], false, "{v}");
+    assert!(
+        v["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "artifact_id_missing"),
+        "{v}"
+    );
+
+    // Pagination far past the end is an empty page, not an overflow.
+    for path in ["/api/v1/configs", "/api/v1/artifacts"] {
+        let (s, page, _) = call(&app, "GET", &format!("{path}?page=42949674&size=100"), None).await;
+        assert_eq!(s, StatusCode::OK, "{path} {page}");
+        assert_eq!(page["items"], json!([]));
+        assert_eq!(page["page"], 42_949_674);
+        let (s, _, _) = call(
+            &app,
+            "GET",
+            &format!("{path}?page=9223372036854775807&size=100"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{path} at i64::MAX");
+    }
+
+    // $explain passes geo to the model, as $predict-sync does.
+    let geo_app = chapkit::Service::new("geo", "Geo", GeoModel)
+        .database(":memory:")
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let (_, sub) = train_model(&geo_app, &fx["train"]).await;
+    let geo = json!({"type": "FeatureCollection", "features": []});
+    let body = json!({"artifact_id": sub["artifact_id"], "historic": fx["historic"], "future": fx["future"], "geo": geo});
+    let (s, out, _) = call(
+        &geo_app,
+        "POST",
+        "/api/v1/ml/$predict-sync",
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    let mut explain = body;
+    explain["location"] = json!("A");
+    explain["time_period"] = json!("2025-01");
+    explain["method"] = json!("shap");
+    let (s, ex, _) = call(&geo_app, "POST", "/api/v1/ml/$explain", Some(explain)).await;
+    assert_eq!(s, StatusCode::OK, "{ex}");
+    assert_eq!(ex["prediction"], 100.0, "{ex}");
+}

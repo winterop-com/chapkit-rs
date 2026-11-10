@@ -28,13 +28,14 @@ pub struct Service {
     max_concurrency: usize,
     eager_wait: Duration,
     cache_size: usize,
+    max_body_bytes: Option<usize>,
 }
 
 impl Service {
     /// A service for `model`. `id` must be a slug (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`).
     ///
     /// Defaults read from the environment: `DATABASE_URL` (in-memory when unset),
-    /// `CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1).
+    /// `CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1), `CHAPKIT_MAX_BODY_MB` (1024).
     pub fn new<M: Model>(id: impl Into<String>, display_name: impl Into<String>, model: M) -> Self {
         let env_u64 = |k: &str, d: u64| {
             std::env::var(k)
@@ -52,6 +53,7 @@ impl Service {
             max_concurrency: usize::try_from(env_u64("CHAPKIT_MAX_CONCURRENCY", 1)).unwrap_or(1),
             eager_wait: Duration::from_millis(env_u64("CHAPKIT_EAGER_WAIT_MS", 1000)),
             cache_size: 16,
+            max_body_bytes: None,
         }
     }
 
@@ -89,6 +91,13 @@ impl Service {
     #[must_use]
     pub fn eager_wait(mut self, d: Duration) -> Self {
         self.eager_wait = d;
+        self
+    }
+
+    /// Largest accepted request body in bytes (default `CHAPKIT_MAX_BODY_MB`, else 1 GiB).
+    #[must_use]
+    pub fn max_body_bytes(mut self, bytes: usize) -> Self {
+        self.max_body_bytes = Some(bytes);
         self
     }
 
@@ -156,7 +165,11 @@ impl Service {
                 }
             })
         });
-        Ok(App::new(self.id, self.display_name, self.version, info)
+        let mut app = App::new(self.id, self.display_name, self.version, info);
+        if let Some(bytes) = self.max_body_bytes {
+            app = app.max_body_bytes(bytes);
+        }
+        Ok(app
             .health_check("database", check)
             .nest("/api/v1/configs", routes::configs::router(state.clone()))
             .nest(

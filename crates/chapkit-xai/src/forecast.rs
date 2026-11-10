@@ -128,11 +128,9 @@ pub fn explain_forecast(
     let value = |x: &[f64]| -> Result<f64> {
         let mut frame = base.clone();
         for (f, v) in features.iter().zip(x) {
-            if let Some(Column::Float(col)) = frame.column_mut(f)
-                && let Some(cell) = col.get_mut(row)
-            {
-                *cell = Some(*v);
-            }
+            frame
+                .set_f64(f, row, Some(*v))
+                .map_err(|e| Error::InvalidInput(e.to_string()))?;
         }
         let pred = predict(&frame).map_err(Error::Model)?;
         cell_mean(&pred, target)

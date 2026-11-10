@@ -85,7 +85,7 @@ async fn main() -> std::io::Result<()> {
 Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by default),
 `SERVICEKIT_ORCHESTRATOR_URL` to register with chap-core, `SERVICEKIT_API_KEYS` for auth,
 `CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1 job at a time),
-`CHAPKIT_SYNC_CONCURRENCY` (cores), `LOG_LEVEL`, `LOG_FORMAT=json`.
+`CHAPKIT_SYNC_CONCURRENCY` (cores), `CHAPKIT_MAX_BODY_MB` (1024), `LOG_LEVEL`, `LOG_FORMAT=json`.
 
 ## Development
 

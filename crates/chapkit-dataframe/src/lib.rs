@@ -116,6 +116,27 @@ mod tests {
     }
 
     #[test]
+    fn set_f64_keeps_the_frame_consistent() {
+        let mut df = decode(json!({
+            "columns": ["location", "rainfall", "cases"],
+            "data": [["A", 1.5, 3], ["B", 2.5, 4]]
+        }));
+        df.set_f64("rainfall", 1, Some(9.0)).unwrap();
+        // An integer column is widened to float.
+        df.set_f64("cases", 0, None).unwrap();
+        assert!(matches!(
+            df.set_f64("rainfall", 2, Some(0.0)),
+            Err(FrameError::RowOutOfRange { rows: 2 })
+        ));
+        assert!(df.set_f64("location", 0, Some(0.0)).is_err());
+        assert!(df.set_f64("nope", 0, Some(0.0)).is_err());
+        assert_eq!(
+            serde_json::to_value(&df).unwrap()["data"],
+            json!([["A", 1.5, null], ["B", 9.0, 4.0]])
+        );
+    }
+
+    #[test]
     fn out_of_range_access_is_an_error_not_a_panic() {
         let df = DataFrame::from_columns([("a", Column::from_f64([1.0, 2.0]))]).unwrap();
         let a = df.column("a").unwrap();

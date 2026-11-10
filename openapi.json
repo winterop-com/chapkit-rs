@@ -1822,6 +1822,13 @@
           "future": {
             "type": "object"
           },
+          "geo": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Passed to every model call, as in `$predict`."
+          },
           "historic": {
             "type": "object"
           },
@@ -2185,7 +2192,7 @@
           },
           "page": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
             "description": "This page number.",
             "minimum": 0
           },
@@ -2197,7 +2204,7 @@
           },
           "size": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
             "description": "Page size.",
             "minimum": 0
           },
@@ -2261,7 +2268,7 @@
           },
           "page": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
             "description": "This page number.",
             "minimum": 0
           },
@@ -2273,7 +2280,7 @@
           },
           "size": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
             "description": "Page size.",
             "minimum": 0
           },

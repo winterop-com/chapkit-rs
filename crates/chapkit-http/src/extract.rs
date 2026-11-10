@@ -22,6 +22,12 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Json<T> {
         let instance = req.uri().path().to_owned();
         match axum::Json::<T>::from_request(req, state).await {
             Ok(axum::Json(v)) => Ok(Json(v)),
+            Err(e) if e.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE => {
+                Err(Problem::payload_too_large(
+                    "Request body is larger than the service accepts (CHAPKIT_MAX_BODY_MB)",
+                )
+                .instance(instance))
+            }
             Err(e) => Err(Problem::validation(vec![
                 json!({"loc": ["body"], "msg": body_error(&e), "type": "value_error"}),
             ])
@@ -72,7 +78,7 @@ pub struct PageParams {
 impl PageParams {
     /// `(page, size)` when both are given and in range; `None` when either is
     /// missing; a 422 problem when out of range.
-    pub fn resolve(self) -> Result<Option<(u32, u32)>, Problem> {
+    pub fn resolve(self) -> Result<Option<(u64, u64)>, Problem> {
         let mut errors = Vec::new();
         if self.page.is_some_and(|p| p < 1) {
             errors.push(json!({"loc": ["query", "page"], "msg": "Input should be greater than or equal to 1", "type": "greater_than_equal"}));
@@ -84,10 +90,21 @@ impl PageParams {
             return Err(Problem::validation(errors));
         }
         Ok(match (self.page, self.size) {
-            (Some(p), Some(s)) => Some((p as u32, s as u32)),
+            // Both are validated positive above, so the conversions cannot fail.
+            (Some(p), Some(s)) => {
+                Some((u64::try_from(p).unwrap_or(1), u64::try_from(s).unwrap_or(1)))
+            }
             _ => None,
         })
     }
+}
+
+/// Row offset of a page: `(page - 1) * size`, saturating, and capped at `i64::MAX` because
+/// SQLite's OFFSET is a signed 64-bit integer. A page past the end is simply empty.
+pub fn page_offset(page: u64, size: u64) -> u64 {
+    page.saturating_sub(1)
+        .saturating_mul(size)
+        .min(i64::MAX.unsigned_abs())
 }
 
 /// A page of results.
@@ -98,21 +115,17 @@ pub struct Paginated<T> {
     /// Total item count.
     pub total: u64,
     /// This page number.
-    pub page: u32,
+    pub page: u64,
     /// Page size.
-    pub size: u32,
+    pub size: u64,
     /// Number of pages (0 when there are no items).
     pub pages: u64,
 }
 
 impl<T> Paginated<T> {
     /// Build a page; `pages` is `ceil(total / size)`.
-    pub fn new(items: Vec<T>, total: u64, page: u32, size: u32) -> Self {
-        let pages = if size == 0 {
-            0
-        } else {
-            total.div_ceil(u64::from(size))
-        };
+    pub fn new(items: Vec<T>, total: u64, page: u64, size: u64) -> Self {
+        let pages = if size == 0 { 0 } else { total.div_ceil(size) };
         Self {
             items,
             total,
@@ -142,7 +155,7 @@ impl<T: Serialize> axum::response::IntoResponse for ListOrPage<T> {
 
 impl<T> ListOrPage<T> {
     /// A list, or a page when `paging` is `Some((page, size))`.
-    pub fn new(items: Vec<T>, total: u64, paging: Option<(u32, u32)>) -> Self {
+    pub fn new(items: Vec<T>, total: u64, paging: Option<(u64, u64)>) -> Self {
         match paging {
             Some((page, size)) => ListOrPage::Page(Paginated::new(items, total, page, size)),
             None => ListOrPage::List(items),

@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::AbortHandle;
 use ulid::Ulid;
 use utoipa::{IntoParams, ToSchema};
@@ -100,6 +101,42 @@ impl JobError {
 /// The work a job runs.
 pub type JobFuture = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
 
+tokio::task_local! {
+    /// The running job's concurrency permit, shared with its blocking calls.
+    static JOB_PERMIT: Arc<OwnedSemaphorePermit>;
+}
+
+/// Run blocking work (a model call) on the blocking pool. Inside a job, the work holds the job's
+/// concurrency permit until it returns: deleting a running job stops waiting for it, but the slot
+/// stays taken until the model call actually finishes, so `max_concurrency` is never exceeded.
+/// A panic in `f` becomes a `RuntimeError`.
+pub async fn blocking<F, R>(f: F) -> Result<R, JobError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let permit = JOB_PERMIT.try_with(Arc::clone).ok();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|e| {
+        if e.is_panic() {
+            JobError::runtime(format!("panicked: {}", panic_message(&*e.into_panic())))
+        } else {
+            JobError::runtime(e.to_string())
+        }
+    })
+}
+
+fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
 struct Entry {
     record: JobRecord,
     abort: Option<AbortHandle>,
@@ -172,14 +209,26 @@ impl Scheduler {
 
         let this = self.clone();
         let handle = tokio::spawn(async move {
-            let Ok(_permit) = this.permits.clone().acquire_owned().await else {
+            let Ok(permit) = this.permits.clone().acquire_owned().await else {
                 return;
             };
             this.update(id, |r| {
                 r.status = JobStatus::Running;
                 r.started_at = Some(job_now());
             });
-            let result = work.await;
+            // A panicking job fails instead of staying "running" forever.
+            let result = JOB_PERMIT
+                .scope(
+                    Arc::new(permit),
+                    std::panic::AssertUnwindSafe(work).catch_unwind(),
+                )
+                .await
+                .unwrap_or_else(|p| {
+                    Err(JobError::runtime(format!(
+                        "panicked: {}",
+                        panic_message(&*p)
+                    )))
+                });
             this.update(id, |r| {
                 r.finished_at = Some(job_now());
                 match result {
@@ -394,6 +443,71 @@ pub fn router(scheduler: Scheduler) -> OpenApiRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_panicking_job_fails_instead_of_hanging() {
+        let s = Scheduler::new(1);
+        let async_panic = s.submit(Box::pin(async { panic!("bad period") }));
+        let r = s
+            .wait_for(async_panic, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(r.status, JobStatus::Failed);
+        assert!(r.error.unwrap().contains("bad period"));
+
+        let blocking_panic = s.submit(Box::pin(async {
+            blocking(|| -> () { panic!("in the model") }).await
+        }));
+        let r = s
+            .wait_for(blocking_panic, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(r.status, JobStatus::Failed);
+        assert!(r.error.unwrap().contains("in the model"));
+
+        // The scheduler still runs jobs afterwards.
+        let ok = s.submit(Box::pin(async { Ok(()) }));
+        assert_eq!(s.wait(ok).await.unwrap().status, JobStatus::Completed);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleting_a_running_job_keeps_its_slot_until_the_model_returns() {
+        let s = Scheduler::new(1);
+        let first_done = Arc::new(AtomicBool::new(false));
+        let flag = first_done.clone();
+        let first = s.submit(Box::pin(async move {
+            blocking(move || {
+                std::thread::sleep(Duration::from_millis(400));
+                flag.store(true, Ordering::SeqCst);
+            })
+            .await
+        }));
+        // Wait until the first job is running inside its blocking call.
+        for _ in 0..100 {
+            if s.get(first).is_some_and(|r| r.status == JobStatus::Running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(s.delete(first));
+
+        let seen_first_done = Arc::new(AtomicBool::new(false));
+        let seen = seen_first_done.clone();
+        let flag = first_done.clone();
+        let second = s.submit(Box::pin(async move {
+            seen.store(flag.load(Ordering::SeqCst), Ordering::SeqCst);
+            Ok(())
+        }));
+        let r = s.wait_for(second, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(r.status, JobStatus::Completed);
+        assert!(
+            seen_first_done.load(Ordering::SeqCst),
+            "second job started while the deleted job's model call was still running"
+        );
+    }
 
     #[tokio::test]
     async fn runs_jobs_and_records_failures() {

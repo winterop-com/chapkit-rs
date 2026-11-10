@@ -27,6 +27,20 @@ pub struct App {
     checks: Checks,
     auth: Option<ApiKeys>,
     registration: Option<Registration>,
+    max_body_bytes: usize,
+}
+
+/// Default request body limit: 1 GiB. chap-core sends whole datasets in one JSON body and
+/// FastAPI (Python chapkit) sets no limit, so this is a guard against runaway uploads, not a cap
+/// meant to be hit. `CHAPKIT_MAX_BODY_MB` overrides it.
+pub const DEFAULT_MAX_BODY_BYTES: usize = 1 << 30;
+
+fn max_body_from_env() -> usize {
+    std::env::var("CHAPKIT_MAX_BODY_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .and_then(|mb| mb.checked_mul(1 << 20))
+        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
 }
 
 impl App {
@@ -46,6 +60,7 @@ impl App {
             checks: Checks::default(),
             auth: ApiKeys::from_env(),
             registration: Registration::from_env(),
+            max_body_bytes: max_body_from_env(),
         }
     }
 
@@ -84,6 +99,13 @@ impl App {
         self
     }
 
+    /// Largest accepted request body in bytes (overrides `CHAPKIT_MAX_BODY_MB`).
+    #[must_use]
+    pub fn max_body_bytes(mut self, bytes: usize) -> Self {
+        self.max_body_bytes = bytes;
+        self
+    }
+
     /// The OpenAPI document and the axum router.
     pub fn build(self) -> (Router, OpenApi, Option<Registration>, String, Value) {
         let (router, mut doc) = self
@@ -114,7 +136,9 @@ impl App {
                 require_api_key,
             ));
         }
-        let router = router.layer(axum::middleware::from_fn(request_id));
+        let router = router
+            .layer(axum::extract::DefaultBodyLimit::max(self.max_body_bytes))
+            .layer(axum::middleware::from_fn(request_id));
         // Decode `%24` to `$` before routing, so `$`-operations match however they are
         // spelled. Starlette (Python chapkit) routes on the decoded path and chap-core's
         // service proxy forwards `%24`; axum routes on the raw path.

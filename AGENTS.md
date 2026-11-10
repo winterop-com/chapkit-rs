@@ -32,6 +32,9 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - Model packages live in the sibling repository `../chapkit-rs-models` (chap-core baseline ports with
   parity tests). They depend on this library by path; update them with every library change and run
   `make models-check`.
+  Their images are built against this repository's `main` but published once per models version (the
+  `version` in chapkit-rs-models' `Cargo.toml`; chap-core treats a model version as write-once). A library
+  change the models should ship reaches their images only with a version bump there.
 
 ## Workflow
 

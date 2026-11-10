@@ -105,6 +105,10 @@ of each value is `series.seasons()` (month 1 to 12). Pass the seasons to a new f
 the values by season, and in `predict` look up the samples for each future row's season
 (`period.period_of_year()`).
 
+`src/lib.rs` also has an example of the model's own checks for `$validate`: it warns about locations with fewer
+observations than the model looks back over. Try `chapkit-rs test --periods 6 -v` to see them
+([Validation](../guide/model-package.md#validation)).
+
 Keep the rule of the package layout: **the calculation goes in `model.rs`, as functions over plain numbers**,
 described in words at the top of the file, so that anyone can read how a forecast is made without reading
 chapkit code. The baselines in [chapkit-rs-models](https://github.com/winterop-com/chapkit-rs-models) are

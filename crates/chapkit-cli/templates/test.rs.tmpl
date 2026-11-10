@@ -27,3 +27,13 @@ fn trains_and_forecasts_every_future_row() {
     .unwrap();
     assert!(checkpoint.tensors.is_empty());
 }
+
+#[test]
+fn validation_warns_about_short_histories() {
+    let spec = Spec { num_locations: 2, num_periods: 6, ..Spec::default() };
+    let data = Generator::new(Some(1)).training_data(&spec).unwrap();
+    let run = RunInfo::with_periods(3);
+    let found = {{type_name}}.validate_train(&Config::default(), TrainInput::new(&data, &run, None));
+    assert_eq!(found.len(), 2, "6 months each, fewer than the 12 the model looks back over");
+    assert_eq!(found[0].code, "short_history");
+}

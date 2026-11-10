@@ -303,6 +303,81 @@ async fn generate_sample_data(
     Ok(axum::Json(payload))
 }
 
+/// Run the model's `validate_train` / `validate_predict` on a blocking thread: they are model code,
+/// possibly slow, and a panic in them must not take the request down.
+async fn model_checks(
+    model: std::sync::Arc<dyn crate::erased::DynModel>,
+    req: ValidateRequest,
+    config: serde_json::Value,
+    run: chapkit_core::RunInfo,
+) -> Vec<Diagnostic> {
+    let found = tokio::task::spawn_blocking(move || match req.kind.as_str() {
+        "train" => req.data.as_ref().map(|data| {
+            model.validate_train(
+                &config,
+                chapkit_core::TrainInput::new(data, &run, req.geo.as_ref()),
+            )
+        }),
+        _ => match (&req.historic, &req.future) {
+            (Some(h), Some(f)) => Some(model.validate_predict(
+                &config,
+                chapkit_core::PredictInput::new(h, f, &run, req.geo.as_ref()),
+            )),
+            _ => None,
+        },
+    })
+    .await;
+    match found {
+        Ok(None) => Vec::new(),
+        Ok(Some(Ok(found))) => found
+            .into_iter()
+            .map(|x| Diagnostic {
+                severity: x.severity.as_str().into(),
+                code: x.code,
+                message: x.message,
+                field: x.field,
+            })
+            .collect(),
+        Ok(Some(Err(e))) => vec![diag("error", "model_check_failed", e.to_string(), None)],
+        Err(_) => vec![diag(
+            "error",
+            "model_check_failed",
+            "the model's validation check panicked",
+            None,
+        )],
+    }
+}
+
+/// `frame` is present, has rows, and has `time_period` and `location` columns.
+fn check_frame(d: &mut Vec<Diagnostic>, frame: Option<&DataFrame>, code: &str, field: &str) {
+    match frame {
+        None => d.push(diag(
+            "error",
+            code,
+            format!("{field} is required"),
+            Some(field),
+        )),
+        Some(f) if f.is_empty() => d.push(diag(
+            "error",
+            code,
+            format!("{field} has no rows"),
+            Some(field),
+        )),
+        Some(f) => {
+            for c in [cols::TIME_PERIOD, cols::LOCATION] {
+                if !f.has(c) {
+                    d.push(diag(
+                        "error",
+                        "missing_column",
+                        format!("{field} has no '{c}' column"),
+                        Some(field),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn diag(severity: &str, code: &str, message: impl Into<String>, field: Option<&str>) -> Diagnostic {
     Diagnostic {
         severity: severity.into(),
@@ -320,33 +395,6 @@ async fn validate(
     Json(req): Json<ValidateRequest>,
 ) -> ApiResult<axum::Json<ValidateResponse>> {
     let mut d = Vec::new();
-    let check_frame =
-        |d: &mut Vec<Diagnostic>, frame: Option<&DataFrame>, code: &str, field: &str| match frame {
-            None => d.push(diag(
-                "error",
-                code,
-                format!("{field} is required"),
-                Some(field),
-            )),
-            Some(f) if f.is_empty() => d.push(diag(
-                "error",
-                code,
-                format!("{field} has no rows"),
-                Some(field),
-            )),
-            Some(f) => {
-                for c in [cols::TIME_PERIOD, cols::LOCATION] {
-                    if !f.has(c) {
-                        d.push(diag(
-                            "error",
-                            "missing_column",
-                            format!("{field} has no '{c}' column"),
-                            Some(field),
-                        ));
-                    }
-                }
-            }
-        };
     let config = match req.kind.as_str() {
         "train" => {
             check_frame(&mut d, req.data.as_ref(), "data_empty", "data");
@@ -387,6 +435,7 @@ async fn validate(
             None
         }
     };
+    let mut run = None;
     match (&config, req.kind.as_str()) {
         (None, "train") => d.push(diag(
             "error",
@@ -395,16 +444,23 @@ async fn validate(
             Some("config_id"),
         )),
         (Some(cfg), _) => {
-            if let Err(e) = ml::resolve_run(&s, req.run_info.as_ref(), cfg, req.future.as_ref()) {
-                d.push(diag(
+            match ml::resolve_run(&s, req.run_info.as_ref(), cfg, req.future.as_ref()) {
+                Ok(r) => run = Some(r),
+                Err(e) => d.push(diag(
                     "error",
                     "prediction_periods_out_of_bounds",
                     e.message,
                     Some("run_info.prediction_periods"),
-                ));
+                )),
             }
         }
         _ => {}
+    }
+    // The model's own checks, only when chapkit's passed (as in Python chapkit).
+    if !d.iter().any(|x| x.severity == "error")
+        && let (Some(cfg), Some(run)) = (config, run)
+    {
+        d.extend(model_checks(s.model().clone(), req, cfg, run).await);
     }
     let valid = !d.iter().any(|x| x.severity == "error");
     Ok(axum::Json(ValidateResponse {

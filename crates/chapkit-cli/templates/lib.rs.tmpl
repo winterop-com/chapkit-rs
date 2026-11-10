@@ -5,9 +5,10 @@ pub mod model;
 
 use std::collections::BTreeMap;
 
-use chapkit::locations::{predict_by_location, series_by_location};
+use chapkit::locations::{predict_by_location, series_by_location, values_by_location};
 use chapkit::{
-    DataFrame, Error, Model, ModelInfo, ModelMetadata, PredictInput, Result, TrainInput,
+    DataFrame, Diagnostic, Error, Model, ModelInfo, ModelMetadata, PredictInput, Result,
+    TrainInput,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -77,5 +78,32 @@ impl Model for {{type_name}} {
             })?;
             Ok(vec![samples.clone(); rows.len()])
         })
+    }
+
+    /// The model's own checks for `$validate`, run before a training is submitted and only when
+    /// chapkit's checks passed (configuration found, data present, horizon within bounds). Report
+    /// what chapkit cannot know; any `Diagnostic::error` makes the request invalid.
+    /// `validate_predict` does the same for forecasting requests.
+    fn validate_train(&self, config: &Config, input: TrainInput<'_>) -> Vec<Diagnostic> {
+        // Example: warn about locations with fewer observations than the model looks back over.
+        let Ok(values) = values_by_location(input.data, &self.info().target) else {
+            return Vec::new();
+        };
+        values
+            .into_iter()
+            .filter_map(|(location, cases)| {
+                let observed = cases.iter().filter(|c| c.is_finite()).count();
+                (observed < config.recent).then(|| {
+                    Diagnostic::warning(
+                        "short_history",
+                        format!(
+                            "location '{location}' has {observed} observed values, fewer than recent = {}",
+                            config.recent
+                        ),
+                    )
+                    .at("data")
+                })
+            })
+            .collect()
     }
 }

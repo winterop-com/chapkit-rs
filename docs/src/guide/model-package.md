@@ -114,6 +114,31 @@ data once, which is small next to decoding the request. polars is optional so sm
 library itself, do not pay its compile time and binary size. Your crate's `polars` dependency must be the
 same minor version (`chapkit::polars` re-exports the one in use); cargo merges the features.
 
+## Validation
+
+chap-core and the chap modeling app can check a request with `$validate` before submitting it. chapkit-rs checks
+what it knows: the configuration exists, the data has rows and the `time_period` and `location` columns, the
+horizon is within the model's bounds. A model adds what only it knows by implementing `validate_train` and
+`validate_predict`, which return findings:
+
+```rust,ignore
+fn validate_train(&self, config: &Config, input: TrainInput<'_>) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    if config.lags > 24 {
+        found.push(
+            Diagnostic::error("too_many_lags", "lags above 24 are not supported").at("config.lags"),
+        );
+    }
+    found
+}
+```
+
+`Diagnostic::error` makes the request invalid; `warning` and `info` are reported but let it through. Each has a
+stable `code` for programs and a message for people, and `at` names the input it is about. The checks run only when
+chapkit's own checks passed, inside the request (on a blocking thread, so a slow or failing check cannot take the
+service down); `input.run` carries the resolved horizon. Both default to no findings. This matches Python chapkit's
+`on_validate_train` and `on_validate_predict`, and `chapkit-rs test -v` shows the findings.
+
 ## Tips
 
 - **Statistical models** with nothing to store use `type Trained = ()` and do their work in `predict`

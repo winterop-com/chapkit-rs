@@ -2529,7 +2529,7 @@
               "object",
               "null"
             ],
-            "description": "Accepted for compatibility; not checked."
+            "description": "Passed to the model's own checks."
           },
           "historic": {
             "type": [

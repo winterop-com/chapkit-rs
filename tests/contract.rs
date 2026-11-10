@@ -13,7 +13,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chapkit::{
-    DataFrame, Model, ModelInfo, PredictInput, Result as ModelResult, TrainInput, cols,
+    DataFrame, Diagnostic, Model, ModelInfo, PredictInput, Result as ModelResult, TrainInput, cols,
     prediction_frame,
 };
 use http_body_util::BodyExt;
@@ -75,6 +75,28 @@ impl Model for MeanModel {
             out.fill(m * cfg.scale);
             Ok(())
         })
+    }
+
+    fn validate_train(&self, cfg: &MeanConfig, _: TrainInput<'_>) -> Vec<Diagnostic> {
+        if cfg.scale < 0.0 {
+            vec![
+                Diagnostic::error("negative_scale", "scale must not be negative")
+                    .at("config.scale"),
+            ]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn validate_predict(&self, _: &MeanConfig, input: PredictInput<'_>) -> Vec<Diagnostic> {
+        if input.historic.n_rows() < 2 {
+            vec![
+                Diagnostic::warning("short_history", "less than two rows of history")
+                    .at("historic"),
+            ]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -663,4 +685,55 @@ async fn review_regressions() {
     let (s, ex, _) = call(&geo_app, "POST", "/api/v1/ml/$explain", Some(explain)).await;
     assert_eq!(s, StatusCode::OK, "{ex}");
     assert_eq!(ex["prediction"], 100.0, "{ex}");
+}
+
+#[tokio::test]
+async fn model_validation_hooks() {
+    let app = app().await;
+    let fx = fixture();
+    let codes = |v: &Value| -> Vec<String> {
+        v["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["code"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let config = |scale: f64| json!({"name": format!("c{}", ulid::Ulid::generate()), "data": {"scale": scale}});
+    let (_, bad, _) = call(&app, "POST", "/api/v1/configs", Some(config(-1.0))).await;
+    let (_, good, _) = call(&app, "POST", "/api/v1/configs", Some(config(1.0))).await;
+
+    // The model's error makes the request invalid, naming the field.
+    let body = json!({"type": "train", "config_id": bad["id"], "data": fx["train"]});
+    let (_, v, _) = call(&app, "POST", "/api/v1/ml/$validate", Some(body)).await;
+    assert_eq!(v["valid"], false, "{v}");
+    assert_eq!(codes(&v), ["negative_scale"]);
+    assert_eq!(v["diagnostics"][0]["field"], "config.scale");
+
+    // When chapkit's own checks fail, the model's do not run.
+    let empty = json!({"columns": ["time_period", "location", "disease_cases"], "data": []});
+    let body = json!({"type": "train", "config_id": bad["id"], "data": empty});
+    let (_, v, _) = call(&app, "POST", "/api/v1/ml/$validate", Some(body)).await;
+    assert_eq!(codes(&v), ["data_empty"], "{v}");
+
+    // A clean request has no findings.
+    let body = json!({"type": "train", "config_id": good["id"], "data": fx["train"]});
+    let (_, v, _) = call(&app, "POST", "/api/v1/ml/$validate", Some(body)).await;
+    assert_eq!(v, json!({"valid": true, "diagnostics": []}));
+
+    // A warning is reported but the request stays valid.
+    let (_, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$train",
+        Some(json!({"config_id": good["id"], "data": fx["train"], "run_info": {"prediction_length": 3}})),
+    )
+    .await;
+    let mut one_row = fx["historic"].clone();
+    one_row["data"] = json!([fx["historic"]["data"][0]]);
+    let body = json!({"type": "predict", "artifact_id": sub["artifact_id"], "historic": one_row, "future": fx["future"]});
+    let (_, v, _) = call(&app, "POST", "/api/v1/ml/$validate", Some(body)).await;
+    assert_eq!(v["valid"], true, "{v}");
+    assert_eq!(codes(&v), ["short_history"]);
+    assert_eq!(v["diagnostics"][0]["severity"], "warning");
 }

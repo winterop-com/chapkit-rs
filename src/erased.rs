@@ -8,7 +8,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use chapkit_core::{
-    Checkpoint, DataFrame, Error, Model, ModelInfo, PredictInput, Result, SearchSpace, TrainInput,
+    Checkpoint, DataFrame, Diagnostic, Error, Model, ModelInfo, PredictInput, Result, SearchSpace,
+    TrainInput,
 };
 use serde_json::{Map, Value, json};
 
@@ -45,6 +46,10 @@ pub trait DynModel: Send + Sync + 'static {
     ) -> Result<DataFrame>;
     /// Whether locations are forecast independently.
     fn locations_independent(&self) -> bool;
+    /// The model's own checks on a training request ([`Model::validate_train`]).
+    fn validate_train(&self, config: &Value, input: TrainInput<'_>) -> Result<Vec<Diagnostic>>;
+    /// The model's own checks on a forecasting request ([`Model::validate_predict`]).
+    fn validate_predict(&self, config: &Value, input: PredictInput<'_>) -> Result<Vec<Diagnostic>>;
 }
 
 /// Wraps a typed model.
@@ -150,6 +155,14 @@ impl<M: Model> DynModel for Erased<M> {
 
     fn locations_independent(&self) -> bool {
         self.0.locations_independent()
+    }
+
+    fn validate_train(&self, config: &Value, input: TrainInput<'_>) -> Result<Vec<Diagnostic>> {
+        Ok(self.0.validate_train(&parse_config::<M>(config)?, input))
+    }
+
+    fn validate_predict(&self, config: &Value, input: PredictInput<'_>) -> Result<Vec<Diagnostic>> {
+        Ok(self.0.validate_predict(&parse_config::<M>(config)?, input))
     }
 }
 

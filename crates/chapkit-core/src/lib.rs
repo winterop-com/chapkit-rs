@@ -16,6 +16,7 @@ mod run;
 pub mod search;
 pub mod synth;
 pub mod testing;
+mod validate;
 
 pub use chapkit_dataframe::{self as frame, Column, DType, DataFrame, FrameError, cols};
 pub use checkpoint::{Checkpoint, Provenance, Tensor, TensorData};
@@ -26,3 +27,4 @@ pub use period::Period;
 pub use prediction::prediction_frame;
 pub use run::{Geo, RunInfo};
 pub use search::{Param, SearchSpace};
+pub use validate::{Diagnostic, Severity};

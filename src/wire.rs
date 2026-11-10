@@ -198,7 +198,7 @@ pub struct ValidateRequest {
     pub historic: Option<DataFrame>,
     #[schema(value_type = Option<Object>)]
     pub future: Option<DataFrame>,
-    /// Accepted for compatibility; not checked.
+    /// Passed to the model's own checks.
     #[schema(value_type = Option<Object>)]
     pub geo: Option<Geo>,
     pub run_info: Option<RunInfoIn>,

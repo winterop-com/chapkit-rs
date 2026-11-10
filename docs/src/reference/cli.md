@@ -35,7 +35,7 @@ Creates a model package from one template, a Rust model using chapkit-rs as a li
 | file | |
 |---|---|
 | `src/model.rs` | the calculation, as plain commented functions (an example to replace) |
-| `src/lib.rs` | the chapkit `Model`: a configuration with one option, per-location training, the prediction table |
+| `src/lib.rs` | the chapkit `Model`: a configuration with one option, per-location training, the prediction table, and an example `$validate` check |
 | `src/main.rs` | the service |
 | `tests/model.rs` | trains and forecasts on generated data, and checks a checkpoint round trip |
 | `Dockerfile`, `Dockerfile.dockerignore` | chapkit-rs's shared Dockerfile ([Docker](../guide/docker.md)) |

@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{Checkpoint, Geo, ModelInfo, Result, RunInfo, SearchSpace};
+use crate::{Checkpoint, Diagnostic, Geo, ModelInfo, Result, RunInfo, SearchSpace};
 
 /// Inputs to [`Model::train`].
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +112,22 @@ pub trait Model: Send + Sync + 'static {
         config: &Self::Config,
         input: PredictInput<'_>,
     ) -> Result<DataFrame>;
+
+    /// Checks of the model's own on a training request, for `$validate`: what chapkit cannot know,
+    /// such as "this location has less history than the model looks back over". Runs only when
+    /// chapkit's checks pass (configuration found, data present, horizon within bounds), in the
+    /// request; `input.run` carries the resolved horizon. Any [`Diagnostic::error`] makes the
+    /// request invalid. Default: no findings.
+    fn validate_train(&self, config: &Self::Config, input: TrainInput<'_>) -> Vec<Diagnostic> {
+        let _ = (config, input);
+        Vec::new()
+    }
+
+    /// As [`Model::validate_train`], for a forecasting request (historic and future data).
+    fn validate_predict(&self, config: &Self::Config, input: PredictInput<'_>) -> Vec<Diagnostic> {
+        let _ = (config, input);
+        Vec::new()
+    }
 }
 
 /// Config for models without user options.

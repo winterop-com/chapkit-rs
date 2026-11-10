@@ -5,6 +5,8 @@ cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
 chapkit-rs --help
 ```
 
+From a checkout, `make release` builds it into `bin/chapkit-rs`, and `make install-cli` installs it.
+
 ## chapkit-rs init
 
 ```text

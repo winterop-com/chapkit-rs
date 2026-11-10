@@ -103,6 +103,7 @@ Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by defaul
 
 ```sh
 make check            # lint + test; run before every commit
+make release          # release build; the chapkit-rs command into bin/
 make test-turso       # store suite and HTTP contract on the turso backend
 make test-polars      # the polars conversion (feature polars)
 make bench            # criterion benchmarks

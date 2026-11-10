@@ -12,7 +12,7 @@ help:
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
 	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
 	@echo "  build     Build the workspace, tests and benches (debug)"
-	@echo "  release   Build the workspace in release mode"
+	@echo "  release   Build the workspace in release mode; the chapkit-rs command into ./bin"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
 	@echo "  test      Run all tests"
@@ -44,6 +44,8 @@ build:
 
 release:
 	@cargo build --workspace --release
+	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs
+	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
 
 lint:
 	@echo ">>> Formatting"
@@ -85,3 +87,4 @@ models-release:
 
 clean:
 	@cargo clean
+	@rm -rf bin

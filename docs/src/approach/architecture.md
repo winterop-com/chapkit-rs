@@ -8,6 +8,7 @@ layers above them.
 | `chapkit-dataframe` | data | a columnar table and the chapkit `{columns, data, schema}` JSON format |
 | `chapkit-core` | model contract | the `Model` trait, run settings, model info, search spaces, periods, checkpoints, RNG, synthetic data. No IO, no async, no HTTP |
 | `chapkit-xai` | explainers | LIME and KernelSHAP over any value function; explaining a forecast cell |
+| `chapkit-eval` | backtests | chap-core's splits, future weather, metrics and target masking, over any `Model`. No IO |
 | `chapkit-http` | HTTP plumbing | problem+json errors, jobs, health, system, info, SSE, metrics, API keys, registration, OpenAPI. No models, no database |
 | `chapkit-store` | persistence | the `Store` trait and its SQLite backend. No HTTP |
 | `chapkit` (root) | service | wires a `Model` to all of the above: configs, artifacts, ML routes, the warm model cache, `Service` |

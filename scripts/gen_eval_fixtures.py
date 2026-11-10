@@ -1,0 +1,285 @@
+"""Generate chapkit-eval's parity fixtures from chap-core's own backtest and metrics.
+
+Run with a chap-core environment (the fixtures were last made with chap-core 2.7.0), from the
+chapkit-rs root:
+
+    make eval-fixtures CHAP_CORE=../../chap-core
+
+which runs `$CHAP_CORE/.venv/bin/python scripts/gen_eval_fixtures.py`. The data is generated
+from a fixed seed, so the output is the same on every run of the same chap-core release.
+
+Writes crates/chapkit-eval/fixtures/eval_<case>.json, each with:
+
+- `data`: the dataset (chapkit `{columns, data}`), with gaps: a missing and a zero target in the
+  evaluation window, and a covariate never observed in one season for one location (so the
+  climatology falls back to its regression);
+- `params`: n_periods, n_splits, stride, n_retrain (and masked ranges, if any);
+- `splits`: per weather provider, chap-core's `train_test_generator` windows: the last train
+  period, each split's last historic period, its future periods and the masked future frame;
+- `models`: per model (chap-core's `seasonal_median`, and `covariate`, a deterministic test model
+  that reads history and future covariates, repeated in Rust), the flat forecasts of chap-core's
+  `backtest` with retraining and the metrics: the aggregate as chap-core's REST API stores it
+  (`compute_all_aggregated_metrics_from_backtest`, observations from the whole dataset), and the
+  breakdowns by horizon and by location.
+"""
+
+import dataclasses
+import datetime
+import json
+import math
+import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from chap_core.api_types import BacktestParams
+from chap_core.assessment.dataset_splitting import train_test_generator
+from chap_core.assessment.evaluation import Evaluation
+from chap_core.assessment.flat_representations import DataDimension
+from chap_core.assessment.metrics import available_metrics, compute_all_aggregated_metrics_from_backtest
+from chap_core.database.dataset_tables import DataSet as DataSetDB
+from chap_core.database.dataset_tables import MaskedRange, Observation
+from chap_core.database.model_templates_and_config_tables import ConfiguredModelDB, ModelTemplateDB
+from chap_core.datatypes import Samples
+from chap_core.models.builtin import get_builtin_model
+from chap_core.spatio_temporal_data.temporal_dataclass import DataSet
+
+OUT = Path(os.environ.get("FIXTURES_OUT") or Path(__file__).resolve().parent.parent / "crates/chapkit-eval/fixtures")
+PROVIDERS = ["climatology", "observed"]
+
+
+def monthly(i: int) -> str:
+    return f"{2018 + i // 12}-{i % 12 + 1:02d}"
+
+
+def weekly(i: int) -> str:
+    # ISO weeks from 2019W01; 2020 has a week 53.
+    year, week, _ = (datetime.date.fromisocalendar(2019, 1, 1) + datetime.timedelta(weeks=i)).isocalendar()
+    return f"{year}W{week:02d}"
+
+
+def dataset(period, n: int, per_year: int, locations: list[str], seed: int) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    rows = []
+    for li, loc in enumerate(locations):
+        population = int(rng.integers(50_000, 500_000))
+        for i in range(n):
+            season = math.sin(2 * math.pi * (i / per_year - 0.1 * li))
+            rainfall = round(max(0.0, 120 + 80 * season + rng.normal(0, 15)), 2)
+            temperature = round(24 + 5 * season + rng.normal(0, 1), 2)
+            humidity = round(60 + 20 * season + rng.normal(0, 5), 2)
+            cases = float(rng.poisson(max(0.5, 20 + 12 * season + 0.05 * rainfall + 4 * li)))
+            p = period(i)
+            # Never observed in one season for one location: the climatology's regression path.
+            if li == 1 and i % per_year == 0:
+                humidity = float("nan")
+            # A missing and a zero target in the evaluation window.
+            if li == 0 and i == n - 2:
+                cases = float("nan")
+            if li == 1 and i == n - 3:
+                cases = 0.0
+            rows.append(
+                {
+                    "time_period": p,
+                    "location": loc,
+                    "disease_cases": cases,
+                    "rainfall": rainfall,
+                    "mean_temperature": temperature,
+                    "humidity": humidity,
+                    "population": population,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def cell(v):
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (float, np.floating)):
+        return None if math.isnan(v) else float(v)
+    return v
+
+
+def wire(df: pd.DataFrame) -> dict:
+    return {"columns": list(df.columns), "data": [[cell(v) for v in row] for row in df.itertuples(index=False)]}
+
+
+def frame(ds: DataSet) -> pd.DataFrame:
+    """A chap-core DataSet as one frame, rows by location then period, periods as chap-core ids."""
+    rows = []
+    for loc, d in ds.items():
+        fields = [f.name for f in dataclasses.fields(d) if f.name != "time_period"]
+        for i, p in enumerate(d.time_period):
+            rows.append({"time_period": p.id, "location": loc} | {f: getattr(d, f)[i] for f in fields})
+    return pd.DataFrame(rows)
+
+
+class Covariate:
+    """Deterministic test model, repeated in crates/chapkit-eval/tests/parity.rs.
+
+    Per sample k: max(0, 0.5 * mean + 0.5 * last + 0.1 * (rainfall - 120) + 0.5 * (mean_temperature - 24) + OFFSETS[k]),
+    with `mean` the location's mean observed target in the training data and `last` its last
+    observed target in the historic data.
+    """
+
+    OFFSETS = np.array([-8.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 8.0])
+
+    def train(self, data: DataSet):
+        means = {}
+        for loc, d in data.items():
+            y = np.asarray(d.disease_cases, dtype=float)
+            means[loc] = float(np.mean(y[np.isfinite(y)]))
+        return CovariatePredictor(means)
+
+
+class CovariatePredictor:
+    def __init__(self, means):
+        self.means = means
+
+    def predict(self, historic: DataSet, future: DataSet) -> DataSet:
+        out = {}
+        for loc, f in future.items():
+            y = np.asarray(historic[loc].disease_cases, dtype=float)
+            last = float(y[np.isfinite(y)][-1])
+            base = (
+                0.5 * self.means[loc]
+                + 0.5 * last
+                + 0.1 * (np.asarray(f.rainfall, dtype=float) - 120)
+                + 0.5 * (np.asarray(f.mean_temperature, dtype=float) - 24)
+            )
+            out[loc] = Samples(f.time_period, np.maximum(base[:, None] + Covariate.OFFSETS[None, :], 0.0))
+        return DataSet(out)
+
+
+class Builtin:
+    """chap-core's estimator shape around a built-in baseline: train returns the predictor."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def train(self, data: DataSet):
+        model = get_builtin_model(self.name)()
+        model.train(data)
+        return model
+
+
+def splits(ds: DataSet, params: dict, provider: str) -> dict:
+    train, gen = train_test_generator(
+        ds, params["n_periods"], params["n_splits"], params["stride"], future_weather_provider=provider
+    )
+    out = []
+    for historic, masked, future in gen:
+        out.append(
+            {
+                "historic_last": historic.period_range[-1].id,
+                "future_periods": [p.id for p in future.period_range],
+                "masked_future": wire(frame(masked)),
+            }
+        )
+    return {"train_last": train.period_range[-1].id, "splits": out}
+
+
+def metrics_of(ds: DataSet, estimator, params: dict) -> dict:
+    model_template = ModelTemplateDB(id="fixture", name="fixture", version="1")
+    configured = ConfiguredModelDB(id="fixture", model_template_id="fixture", model_template=model_template)
+    evaluation = Evaluation.create(
+        configured_model=configured,
+        estimator=estimator,
+        dataset=ds,
+        backtest_params=BacktestParams(
+            n_periods=params["n_periods"],
+            n_splits=params["n_splits"],
+            stride=params["stride"],
+            n_retrain=params["n_retrain"],
+            future_weather_provider="climatology",
+        ),
+        historical_context_years=0,
+    )
+    backtest = evaluation.to_backtest()
+    # As chap-core's REST API stores aggregate_metrics: the backtest's dataset is the whole
+    # stored dataset, so the observations are every observed target, not only the test windows.
+    observations = [
+        Observation(period=p.id, org_unit=loc, value=float(v), feature_name="disease_cases")
+        for loc, d in ds.items()
+        for p, v in zip(d.time_period, d.disease_cases, strict=True)
+        if np.isfinite(v)
+    ]
+    backtest.dataset = DataSetDB(name="fixture", observations=observations)
+    aggregate = compute_all_aggregated_metrics_from_backtest(backtest)
+
+    flat = Evaluation.from_backtest(backtest).to_flat()
+    by = {}
+    for dim in (DataDimension.horizon_distance, DataDimension.location):
+        by[dim.value] = {}
+        for metric_id, cls in available_metrics.items():
+            metric = cls()
+            try:
+                df = metric.get_metric(flat.observations, flat.forecasts, dimensions=(dim,))
+            except ValueError:
+                # chap-core 2.7.0's grouped root-mean-square (RMSE) loses the group column; the
+                # same aggregation, applied to chap-core's own detailed values.
+                detailed = metric.get_detailed_metric(flat.observations, flat.forecasts)
+                df = (
+                    detailed.groupby(dim.value)["metric"]
+                    .apply(lambda x: np.sqrt((x**2).mean()))
+                    .reset_index()
+                )
+            by[dim.value][metric_id] = {str(k): cell(v) for k, v in zip(df[dim.value], df["metric"], strict=True)}
+
+    forecasts = []
+    keys = ["location", "time_period", "horizon_distance"]
+    for (loc, period, h), g in flat.forecasts.groupby(keys, sort=True):
+        forecasts.append(
+            {
+                "location": loc,
+                "time_period": period,
+                "horizon": int(h),
+                "samples": [float(v) for v in g.sort_values("sample")["forecast"]],
+            }
+        )
+    return {
+        "forecasts": forecasts,
+        "aggregate": aggregate,
+        "by_horizon": by["horizon_distance"],
+        "by_location": by["location"],
+    }
+
+
+def run(case: str, df: pd.DataFrame, params: dict, masked: list[dict] | None = None) -> None:
+    ds = DataSet.from_pandas(df)
+    if masked:
+        ds = ds.apply_masked_ranges([MaskedRange(**r) for r in masked])
+    out = {
+        "chap_core": "2.7.0",
+        "params": params | ({"masked_ranges": masked} if masked else {}),
+        "data": wire(df),
+        "splits": {p: splits(ds, params, p) for p in PROVIDERS},
+        "models": {
+            "seasonal_median": metrics_of(ds, Builtin("seasonal_median"), params),
+            "covariate": metrics_of(ds, Covariate(), params),
+        },
+    }
+    path = OUT / f"eval_{case}.json"
+    path.write_text(json.dumps(out, indent=None) + "\n")
+    print(f"wrote {path}")
+
+
+if __name__ == "__main__":
+    OUT.mkdir(parents=True, exist_ok=True)
+    run(
+        "monthly",
+        dataset(monthly, 48, 12, ["A", "B", "C"], seed=1),
+        {"n_periods": 3, "n_splits": 4, "stride": 2, "n_retrain": 2},
+    )
+    run(
+        "weekly",
+        dataset(weekly, 130, 52, ["A", "B"], seed=2),
+        {"n_periods": 4, "n_splits": 5, "stride": 1, "n_retrain": 2},
+    )
+    run(
+        "masked",
+        dataset(monthly, 36, 12, ["A", "B"], seed=3),
+        {"n_periods": 2, "n_splits": 3, "stride": 1, "n_retrain": 3},
+        masked=[{"start": "2018-03", "end": "2018-05"}],
+    )

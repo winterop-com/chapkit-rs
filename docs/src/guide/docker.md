@@ -22,7 +22,7 @@ docker build -f chapkit-rs/docker/Dockerfile \
 | `BIN` | the binary to build (required) |
 | `FEATURES` | cargo features, for example `turso` |
 | `GIT_REVISION` | the commit, reported as `git_revision` in `/api/v1/info`; chap-core stores a model template only for services that report one |
-| `RUST_IMAGE`, `RUNTIME_IMAGE` | the build and runtime base images |
+| `RUST_IMAGE` | the build image, `rust:1.99-alpine` (it must build for musl) |
 
 `docker/Dockerfile.dockerignore` keeps build output (`target/`, `bin/`), git data and local environments out of
 the build context.
@@ -31,13 +31,19 @@ the build context.
 
 | | |
 |---|---|
-| base | `gcr.io/distroless/cc-debian13`: glibc and certificates, no shell, no package manager |
-| contents | the one binary, `/usr/local/bin/service` |
+| base | `scratch`: no shell, no libc, no package manager |
+| contents | the one binary, `/usr/local/bin/service`, statically linked against musl; CA certificates (for registering with chap-core over https); `/etc/passwd`; an empty `/tmp` |
+| size | 6.5 MB content, 19.9 MB on disk (`docker image ls`) for the seasonal median baseline; 16.8 MB and 71.9 MB on the earlier distroless base |
 | user | uid 1000, as in Python chapkit's images |
 | listens on | `0.0.0.0:8000` (`HOST`, `PORT`) |
 | database | `DATABASE_URL=sqlite:////work/data/chapkit.db`: mount a volume on `/work/data` so results survive restarts |
-| filesystem | can be read-only; only `/work/data` is written |
-| health | `HEALTHCHECK` runs `service healthcheck`, which calls the running service's `/health` (minimal images have no curl) |
+| filesystem | can be read-only; only `/work/data` is written, and `/tmp` by SQLite for large temporary tables (mount a tmpfs there) |
+| health | `HEALTHCHECK` runs `service healthcheck`, which calls the running service's `/health` (the image has no curl) |
+
+musl's own allocator is slow under multithreading: training a baseline with rayon took four to six times as long.
+chapkit therefore uses mimalloc as the global allocator in every musl build, which makes the image as fast as or
+faster than a glibc build (seasonal median, 5000 locations x 120 periods: train 25-30 ms against 104-134 ms). A
+model binary that sets its own `#[global_allocator]` cannot be built for musl.
 
 The image's command is `service serve`; `docker run <image> test` runs chap-core's flow against a running
 service instead. Every chapkit-rs binary has a `healthcheck` subcommand: it checks the service on `PORT` and exits

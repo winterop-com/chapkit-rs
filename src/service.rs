@@ -226,7 +226,8 @@ impl Service {
     }
 
     /// Run a [`Command`]: `serve` until shutdown (`--database` and `--max-concurrency`, or their
-    /// environment variables, override the builder), `test` the running service, or `healthcheck` it.
+    /// environment variables, override the builder), `test` the running service, `eval` the model
+    /// in-process (a backtest), or `healthcheck` the service.
     pub async fn run(mut self, command: Command) -> std::io::Result<()> {
         match command {
             Command::Healthcheck(address) => chapkit_http::health::probe(&address.url()).await,
@@ -241,6 +242,12 @@ impl Service {
                 chapkit_flow::run(&url, &test.flow)
                     .await
                     .map_err(std::io::Error::other)
+            }
+            Command::Eval(args) => {
+                let report = crate::eval_cmd::run(self.model.as_ref(), &self.id, &args)
+                    .map_err(std::io::Error::other)?;
+                println!("{report}");
+                Ok(())
             }
             Command::Serve(args) => {
                 self = self.with_serve_args(&args);

@@ -53,6 +53,7 @@ write and serve a model package, testing with chap-core, and the results.
 | `chapkit` (root) | What model authors depend on. `Service` turns a `Model` into the full chapkit HTTP API. |
 | `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints, RNG, synthetic data. Pure: no IO. |
 | `chapkit-xai` | LIME and KernelSHAP over forecasts, in-process and parallel. |
+| `chapkit-eval` | chap-core's backtest in-process: splits, future weather, metrics, with chap-core's numbers. Pure: no IO. |
 | `chapkit-dataframe` | Columnar `DataFrame` with the chapkit `{columns, data}` wire format. |
 | `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, SSE, metrics, auth, registration, OpenAPI. |
 | `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend, turso backend (feature `turso`). |

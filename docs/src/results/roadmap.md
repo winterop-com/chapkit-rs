@@ -6,24 +6,22 @@ the committed OpenAPI document with a Python comparison, and chap-core end-to-en
 
 Also done: the turso storage backend (feature `turso`), passing the same store suite and HTTP contract; a
 shared container image for model packages (published to GHCR, run as managed models in chap-devops); a
-command line in every model binary (`serve`, `test`, `healthcheck`).
+command line in every model binary (`serve`, `test`, `eval`, `healthcheck`).
 
 Next:
 
-- **Backtests in-process** (`chapkit-eval`): chap-core's evaluation, run inside the model service. chap-core
-  splits the data into expanding train windows with a forecast window after each (`n_splits`, `stride`,
-  `n_retrain`), fills the future climate from a weather provider so nothing leaks, and scores the forecasts.
-  In the full-stack run one backtest took 47 s through chap-core, of which the model took under a second;
-  in-process it is a matter of milliseconds, which is also what hyperparameter search needs.
-  - A pure crate, like `chapkit-core`: the splitter (chap-core's `train_test_generator`, with retraining),
-    the metrics (CRPS and its log and normalised forms, MAE, RMSE, MAPE, coverage, Winkler, ratio above truth),
-    the observed and seasonal climatology weather providers, and target masking.
-  - Parity with a pinned chap-core release, checked against fixtures chap-core generates, like the baselines;
-    refreshed on every chap-core release. chap-core stays the source of record: this is the developer's preview
-    of its evaluation, and must give the same numbers.
-  - Exposed as `<bin> eval` (a dataset file or generated data; scores by horizon and location) and as a
-    Rust-only `$backtest` job endpoint, like `$explain`.
-  - Uses checkpoint provenance: splits that start before a pre-trained model's `trained_until` are flagged.
+- **Backtests in-process** (`chapkit-eval`, [guide](../guide/eval.md)): chap-core's evaluation, run inside
+  the model service. In the full-stack run one backtest took 47 s through chap-core, of which the model took
+  under a second; in-process it is a matter of milliseconds, which is also what hyperparameter search needs.
+  - Done: a pure crate with chap-core 2.7.0's splitter (`train_test_generator`, with retraining), the
+    metrics (CRPS and its log and normalised forms, MAE, RMSE, MAPE, coverage, Winkler, ratio above truth;
+    aggregate, by horizon and by location), the observed and climatology weather providers, and target
+    masking; parity with fixtures chap-core generates (`make eval-fixtures`), to 1e-12; `<bin> eval` on a
+    CSV or JSON dataset or generated data.
+  - Next: chap-core's other weather providers (damped persistence, MSTL + ARIMA); target masking on the
+    command line; a Rust-only `$backtest` job endpoint, like `$explain`; checkpoint provenance (splits that
+    start before a pre-trained model's `trained_until` are flagged); refreshing the fixtures on every
+    chap-core release; the workbench UI below, to show the scores and forecasts.
   - Later, with chap-core: a `$predict-splits` endpoint returning every split's forecasts in one call, so
     chap-core's own backtest makes one round trip per training instead of one per split and still scores
     the forecasts itself.

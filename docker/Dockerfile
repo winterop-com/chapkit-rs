@@ -11,12 +11,12 @@
 #         --build-arg GIT_REVISION=$(git -C chapkit-rs-models rev-parse HEAD) \
 #         -t baseline-global-median .
 #
-# The image holds the one binary on a minimal base (no shell, no package manager), runs as uid 1000,
-# serves (`service serve`) on 0.0.0.0:8000, and keeps its SQLite database in /work/data (mount a volume there). The
-# root filesystem can be read-only; only /work/data is written.
+# The image holds one statically linked (musl) binary and CA certificates on an empty base (no shell,
+# no libc, no package manager), runs as uid 1000, serves (`service serve`) on 0.0.0.0:8000, and keeps
+# its SQLite database in /work/data (mount a volume there). The root filesystem can be read-only; only
+# /work/data (and /tmp, for SQLite's temporary files) is written.
 
-ARG RUST_IMAGE=rust:1.99-slim-trixie
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot
+ARG RUST_IMAGE=rust:1.99-alpine
 
 FROM ${RUST_IMAGE} AS build
 # The cargo workspace to build in (a directory of the build context), the binary, and optional
@@ -24,19 +24,24 @@ FROM ${RUST_IMAGE} AS build
 ARG WORKSPACE
 ARG BIN
 ARG FEATURES=""
+# Alpine's Rust targets musl, which links statically: the binary needs nothing from the runtime image.
+RUN apk add --no-cache musl-dev ca-certificates
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    --mount=type=cache,id=chapkit-rs-target-musl,target=/cargo-target,sharing=locked \
     test -n "$WORKSPACE" && test -n "$BIN" \
     && cd "$WORKSPACE" \
     && CARGO_TARGET_DIR=/cargo-target cargo build --release --locked --bin "$BIN" ${FEATURES:+--features "$FEATURES"} \
-    && mkdir -p /out/bin /out/work/data \
-    && cp "/cargo-target/release/$BIN" /out/bin/service \
-    && chown -R 1000:1000 /out/work
+    && mkdir -p /out/root/usr/local/bin /out/root/etc/ssl/certs /out/root/tmp /out/work/data \
+    && cp "/cargo-target/release/$BIN" /out/root/usr/local/bin/service \
+    && cp /etc/ssl/certs/ca-certificates.crt /out/root/etc/ssl/certs/ \
+    && echo 'chapkit:x:1000:1000::/work:/sbin/nologin' > /out/root/etc/passwd \
+    && echo 'chapkit:x:1000:' > /out/root/etc/group \
+    && chmod 1777 /out/root/tmp
 
-FROM ${RUNTIME_IMAGE}
+FROM scratch
 # Commit the image was built from, reported as git_revision in /api/v1/info (chap-core stores a
 # model template only for services that report one).
 ARG GIT_REVISION=""
@@ -44,12 +49,12 @@ ENV GIT_REVISION=${GIT_REVISION} \
     HOST=0.0.0.0 \
     PORT=8000 \
     DATABASE_URL=sqlite:////work/data/chapkit.db
-COPY --from=build /out/bin/service /usr/local/bin/service
+COPY --from=build /out/root /
 COPY --from=build --chown=1000:1000 /out/work /work
 WORKDIR /work
 USER 1000:1000
 EXPOSE 8000
-# The binary checks its own /health: minimal images have no curl.
+# The binary checks its own /health: the image has no curl.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD ["/usr/local/bin/service", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/service"]

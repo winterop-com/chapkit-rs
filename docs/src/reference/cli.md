@@ -137,6 +137,7 @@ Usage: my-model <COMMAND>
 Commands:
   serve        Serve the model
   test         Test the running service
+  eval         Backtest the model in-process
   healthcheck  Check the running service's health
   help         Print this message or the help of the given subcommand(s)
 
@@ -158,3 +159,26 @@ Usage: my-model serve [OPTIONS]
 `my-model test` in another need no further arguments; `--url` overrides. When nothing answers there it says so
 and exits non-zero. `healthcheck` checks the service on `--host`/`--port` and exits non-zero unless it is
 healthy; the Docker image's `HEALTHCHECK` runs it. `--version` prints the service's id and version.
+
+### eval
+
+```text
+Usage: my-model eval [OPTIONS]
+      --data <FILE>            Dataset, CSV or JSON [default: generated]
+      --periods <PERIODS>      Periods per forecast [default: 3]
+      --splits <SPLITS>        Splits [default: 7]
+      --stride <STRIDE>        Periods between splits [default: 1]
+      --retrain <RETRAIN>      Trainings [default: 1]
+      --weather <WEATHER>      Future weather [default: climatology] [possible values: climatology, observed]
+      --locations <LOCATIONS>  Generated locations [default: 5]
+      --history <HISTORY>      Generated periods [default: 60]
+      --seed <SEED>            Seed for generated data [default: random]
+      --by-location            Scores by location
+```
+
+A backtest of the model in-process, as chap-core runs one, with chap-core's metrics: no service, no
+database. `--periods`, `--splits`, `--stride` and `--retrain` are chap-core's `n_periods`, `n_splits`,
+`stride` and `n_retrain`, with its defaults. Without `--data` the dataset is generated as `test` generates
+it (`--locations` x `--history` periods, the model's covariates and period type); the seed is printed. It
+prints the aggregate metrics and the same by horizon, and with `--by-location` a table by location. See
+[Backtests in-process](../guide/eval.md).

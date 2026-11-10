@@ -8,8 +8,15 @@
 //! Model packages, starting with ports of chap-core's baselines, live in the
 //! separate chapkit-rs-models repository and are not part of the library.
 
+/// musl's allocator is slow under multithreading (rayon); every musl build of a chapkit binary, such as
+/// the Docker image, uses mimalloc instead.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod cli;
 mod erased;
+mod eval_cmd;
 mod ml;
 mod routes;
 mod service;
@@ -21,6 +28,7 @@ pub use chapkit_dataframe as dataframe;
 /// polars, at the version `DataFrame::to_polars` / `from_polars` use (feature `polars`).
 #[cfg(feature = "polars")]
 pub use chapkit_dataframe::polars;
+pub use chapkit_eval as eval;
 pub use chapkit_flow as flow;
 pub use chapkit_http as http;
 pub use chapkit_store as store;

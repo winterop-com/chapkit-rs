@@ -1,6 +1,7 @@
-.PHONY: help install check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
+.PHONY: help install check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi eval-fixtures models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
+CHAP_CORE ?= ../../chap-core
 
 
 help:
@@ -22,6 +23,7 @@ help:
 	@echo "  docs-serve  Serve the mdBook with live reload"
 	@echo "  openapi   Regenerate the committed openapi.json"
 	@echo "  compare-openapi PY=<url> RS=<url>  Diff a Python chapkit service's OpenAPI against a chapkit-rs one"
+	@echo "  eval-fixtures   Regenerate chapkit-eval's parity fixtures from chap-core (CHAP_CORE=$(CHAP_CORE))"
 	@echo "  models-check    Run make check in $(MODELS)"
 	@echo "  models-release  Build the model binaries into $(MODELS)/bin"
 	@echo "  clean     Remove build output"
@@ -95,6 +97,9 @@ openapi:
 compare-openapi:
 	@if [ -z "$(PY)" ] || [ -z "$(RS)" ]; then echo "usage: make compare-openapi PY=<python chapkit url> RS=<chapkit-rs url>"; exit 2; fi
 	@python3 scripts/compare_openapi.py $(PY) $(RS)
+
+eval-fixtures:
+	@$(CHAP_CORE)/.venv/bin/python scripts/gen_eval_fixtures.py
 
 models-check:
 	@$(MAKE) -C $(MODELS) check

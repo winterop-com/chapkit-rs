@@ -1,15 +1,16 @@
 //! A model binary's command line, parsed by [`Service::serve`](crate::Service::serve).
 //!
-//! `<bin> serve` serves, `<bin> test` runs chap-core's flow against the running service, and
-//! `<bin> healthcheck` checks it (the Docker `HEALTHCHECK`); without arguments the binary prints
-//! its help. A binary with subcommands of its own adds `#[command(flatten)] Chapkit(Command)` to
+//! `<bin> serve` serves, `<bin> test` runs chap-core's flow against the running service,
+//! `<bin> eval` backtests the model in-process, and `<bin> healthcheck` checks the service (the
+//! Docker `HEALTHCHECK`); without arguments the binary prints its help. A binary with subcommands of its own adds `#[command(flatten)] Chapkit(Command)` to
 //! its own clap subcommand enum, parses it with [`Service::parse_args`](crate::Service::parse_args)
 //! and hands the [`Command`] to [`Service::run`](crate::Service::run).
 
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// A command's outcome as the binary's exit code: on error, one line `error: ...` on stderr and
 /// exit code 1. Model binaries with commands of their own end `main` with it, so every command
@@ -70,6 +71,62 @@ pub struct TestArgs {
     pub flow: chapkit_flow::Options,
 }
 
+/// Where a backtest's future covariates come from.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Weather {
+    // Seasonal means of the history. Plain comments: help on the values would switch clap to its
+    // long help layout.
+    #[default]
+    Climatology,
+    // As observed: looks ahead, for diagnostics only.
+    Observed,
+}
+
+impl Weather {
+    /// chap-core's provider id.
+    pub fn id(self) -> &'static str {
+        match self {
+            Weather::Climatology => "climatology",
+            Weather::Observed => "observed",
+        }
+    }
+}
+
+/// `<bin> eval`: a backtest in-process, scored as chap-core scores it.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct EvalArgs {
+    /// Dataset, CSV or JSON [default: generated]
+    #[arg(long, value_name = "FILE")]
+    pub data: Option<PathBuf>,
+    /// Periods per forecast
+    #[arg(long, default_value_t = 3)]
+    pub periods: usize,
+    /// Splits
+    #[arg(long, default_value_t = 7)]
+    pub splits: usize,
+    /// Periods between splits
+    #[arg(long, default_value_t = 1)]
+    pub stride: usize,
+    /// Trainings
+    #[arg(long, default_value_t = 1)]
+    pub retrain: usize,
+    /// Future weather (observed looks ahead)
+    #[arg(long, value_enum, default_value_t)]
+    pub weather: Weather,
+    /// Generated locations
+    #[arg(long, default_value_t = 5)]
+    pub locations: usize,
+    /// Generated periods
+    #[arg(long, default_value_t = 60)]
+    pub history: usize,
+    /// Seed for generated data [default: random]
+    #[arg(long)]
+    pub seed: Option<u64>,
+    /// Scores by location
+    #[arg(long)]
+    pub by_location: bool,
+}
+
 /// The library's subcommands.
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -77,6 +134,8 @@ pub enum Command {
     Serve(ServeArgs),
     /// Test the running service
     Test(TestArgs),
+    /// Backtest the model in-process
+    Eval(EvalArgs),
     /// Check the running service's health
     Healthcheck(Address),
 }
@@ -209,6 +268,34 @@ mod tests {
         assert_eq!(s.max_concurrency, Some(4));
         assert!(parse(&["bin", "serve", "--port", "nope"]).is_err());
         assert!(parse(&["bin", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn eval_defaults_as_chap_core() {
+        let Command::Eval(e) = parse(&["bin", "eval"]).unwrap().command else {
+            panic!("expected eval")
+        };
+        assert_eq!((e.periods, e.splits, e.stride, e.retrain), (3, 7, 1, 1));
+        assert_eq!(e.weather, Weather::Climatology);
+        assert_eq!(e.data, None);
+        let Command::Eval(e) = parse(&[
+            "bin",
+            "eval",
+            "--data",
+            "d.csv",
+            "--weather",
+            "observed",
+            "--retrain",
+            "2",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected eval")
+        };
+        assert_eq!(e.data, Some(PathBuf::from("d.csv")));
+        assert_eq!((e.weather.id(), e.retrain), ("observed", 2));
+        assert!(parse(&["bin", "eval", "--weather", "mstl"]).is_err());
     }
 
     #[test]

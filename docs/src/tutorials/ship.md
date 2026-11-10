@@ -18,8 +18,8 @@ docker compose ps --format '{{.Service}} {{.Status}}'
 The first build compiles everything inside Docker and takes a few minutes. When the service reports
 `(healthy)`, it is ready.
 
-The image is chapkit-rs's shared Dockerfile, which `init` copied into the package: the one binary on a minimal
-base image, running as uid 1000, with its database in a volume and a health check ([Docker](../guide/docker.md)).
+The image is chapkit-rs's shared Dockerfile, which `init` copied into the package: one static binary on an
+empty base image (a few MB), running as uid 1000, with its database in a volume and a health check ([Docker](../guide/docker.md)).
 
 ## 2. Check it
 

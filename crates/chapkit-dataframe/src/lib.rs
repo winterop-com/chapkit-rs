@@ -5,6 +5,7 @@
 //! which matters when explainers build thousands of perturbed inputs.
 
 mod column;
+mod csv;
 mod decode;
 mod frame;
 #[cfg(feature = "polars")]

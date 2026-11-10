@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "chapkit-core",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chapkit-core",
  "chapkit-flow",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chapkit-dataframe",
  "rayon",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-dataframe"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "polars",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-eval"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chapkit-core",
  "criterion",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-flow"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chapkit-core",
  "clap",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "rusqlite",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "chapkit-xai"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chapkit-core",
  "rayon",

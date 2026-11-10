@@ -13,12 +13,12 @@ From a checkout, `make release` builds it into `bin/chapkit-rs`, and `make insta
 Usage: chapkit-rs init [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  Package name, also the service id chap-core sees: lowercase words joined by hyphens
+  <NAME>  Package and service id, e.g. my-model
 
 Options:
-      --dir <DIR>            Directory to create (default: the name)
-      --chapkit-path <PATH>  Depend on a local chapkit-rs checkout instead of the git repository
-      --title <TITLE>        Display name (default: from the package name)
+      --dir <DIR>            Directory to create [default: NAME]
+      --chapkit-path <PATH>  Use a local chapkit-rs checkout
+      --title <TITLE>        Display name
 ```
 
 Creates a model package with one template, a Rust model using chapkit-rs as a library:
@@ -43,11 +43,11 @@ when that checkout sits next to the package, `compose.yml` builds from the paren
 Usage: chapkit-rs test [OPTIONS]
 
 Options:
-      --url <URL>              Base URL of the service [default: http://127.0.0.1:8000]
-      --locations <LOCATIONS>  Locations in the generated data [default: 5]
-      --periods <PERIODS>      Periods of training data [default: 36]
-      --timeout <TIMEOUT>      Seconds to wait for each job [default: 300]
-      --keep                   Keep the configuration and artifacts the test creates
+      --url <URL>              Service URL [default: http://127.0.0.1:8000]
+      --locations <LOCATIONS>  Locations in the test data [default: 5]
+      --periods <PERIODS>      Training periods [default: 36]
+      --timeout <TIMEOUT>      Seconds to wait per job [default: 300]
+      --keep                   Keep what the test creates
 ```
 
 Runs chap-core's flow against a running service and checks every response has the shape chap-core relies on:

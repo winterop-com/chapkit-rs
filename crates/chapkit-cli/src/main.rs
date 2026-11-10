@@ -10,11 +10,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(
-    name = "chapkit-rs",
-    version,
-    about = "Build and test chapkit-rs model packages"
-)]
+#[command(name = "chapkit-rs", version, about = "chapkit-rs model packages")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -22,37 +18,41 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a new model package: the calculation in src/model.rs, the chapkit plumbing in
-    /// src/lib.rs, the service in src/main.rs, a test, a Dockerfile and a compose file.
+    /// Create a model package
+    ///
+    /// The calculation goes in src/model.rs, the chapkit plumbing in src/lib.rs and the service in
+    /// src/main.rs; a test, a Dockerfile and a compose file come with it.
     Init {
-        /// Package name, also the service id chap-core sees: lowercase words joined by hyphens.
+        /// Package and service id, e.g. my-model
         name: String,
-        /// Directory to create (default: the name).
+        /// Directory to create [default: NAME]
         #[arg(long)]
         dir: Option<PathBuf>,
-        /// Depend on a local chapkit-rs checkout instead of the git repository.
+        /// Use a local chapkit-rs checkout
         #[arg(long, value_name = "PATH")]
         chapkit_path: Option<PathBuf>,
-        /// Display name (default: from the package name).
+        /// Display name
         #[arg(long)]
         title: Option<String>,
     },
-    /// Run chap-core's flow against a running service: health, info, configuration, sample data,
-    /// training and forecasting jobs, and the shape of the stored forecast.
+    /// Test a running service
+    ///
+    /// Runs chap-core's flow against it: health, info, configuration, sample data, training and
+    /// forecasting jobs, and the shape of the stored forecast.
     Test {
-        /// Base URL of the service.
+        /// Service URL
         #[arg(long, default_value = "http://127.0.0.1:8000")]
         url: String,
-        /// Locations in the generated data.
+        /// Locations in the test data
         #[arg(long, default_value_t = 5)]
         locations: usize,
-        /// Periods of training data.
+        /// Training periods
         #[arg(long, default_value_t = 36)]
         periods: usize,
-        /// Seconds to wait for each job.
+        /// Seconds to wait per job
         #[arg(long, default_value_t = 300)]
         timeout: u64,
-        /// Keep the configuration and artifacts the test creates.
+        /// Keep what the test creates
         #[arg(long)]
         keep: bool,
     },

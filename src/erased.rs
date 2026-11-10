@@ -17,6 +17,18 @@ use serde_json::{Map, Value, json};
 pub type Trained = Arc<dyn Any + Send + Sync>;
 
 /// Keys chapkit reserves in every config's `data`.
+/// The default horizon of a config type: the `default` its JSON schema gives `prediction_periods`
+/// when the config declares that field, else [`DEFAULT_PREDICTION_PERIODS`].
+fn default_prediction_periods<C: schemars::JsonSchema>() -> u64 {
+    serde_json::to_value(schemars::schema_for!(C))
+        .ok()
+        .and_then(|s| {
+            s.pointer("/properties/prediction_periods/default")
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(DEFAULT_PREDICTION_PERIODS)
+}
+
 pub const RESERVED_KEYS: [&str; 2] = ["prediction_periods", "additional_continuous_covariates"];
 
 /// Default forecast horizon when neither the request nor the config sets one.
@@ -101,8 +113,10 @@ impl<M: Model> DynModel for Erased<M> {
                 obj.entry(k).or_insert(v);
             }
         }
+        // The model's own default, when its config declares `prediction_periods` (as a Python
+        // chapkit config subclass can), else chapkit's.
         obj.entry("prediction_periods")
-            .or_insert_with(|| json!(DEFAULT_PREDICTION_PERIODS));
+            .or_insert_with(|| json!(default_prediction_periods::<M::Config>()));
         obj.entry("additional_continuous_covariates")
             .or_insert_with(|| json!([]));
         match obj.get("prediction_periods") {
@@ -176,5 +190,74 @@ pub fn without_content(data: &Value) -> Value {
                 .collect::<Map<_, _>>(),
         ),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chapkit_core::{ModelInfo, NoConfig, PredictInput, Result, TrainInput, prediction_frame};
+    use serde::{Deserialize, Serialize};
+
+    /// A config that declares its own default horizon, as a Python chapkit config subclass can.
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    struct Twelve {
+        #[serde(default = "twelve")]
+        prediction_periods: u32,
+    }
+
+    fn twelve() -> u32 {
+        12
+    }
+
+    struct M<C>(std::marker::PhantomData<C>);
+
+    impl<C> Model for M<C>
+    where
+        C: schemars::JsonSchema
+            + Serialize
+            + serde::de::DeserializeOwned
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        type Config = C;
+        type Trained = ();
+
+        fn info(&self) -> ModelInfo {
+            ModelInfo::default()
+        }
+
+        fn train(&self, _: &C, _: TrainInput<'_>) -> Result<()> {
+            Ok(())
+        }
+
+        fn predict(&self, (): &(), _: &C, input: PredictInput<'_>) -> Result<DataFrame> {
+            prediction_frame(input.future, 1, |_, _| Ok(()))
+        }
+    }
+
+    #[test]
+    fn a_model_can_declare_its_default_horizon() {
+        let own = Erased(M::<Twelve>(std::marker::PhantomData));
+        assert_eq!(
+            own.normalize_config(json!({})).unwrap()["prediction_periods"],
+            12
+        );
+        assert_eq!(
+            own.normalize_config(json!({"prediction_periods": 4}))
+                .unwrap()["prediction_periods"],
+            4
+        );
+        assert_eq!(
+            own.config_schema()["properties"]["prediction_periods"]["default"],
+            12
+        );
+        let plain = Erased(M::<NoConfig>(std::marker::PhantomData));
+        assert_eq!(
+            plain.normalize_config(json!({})).unwrap()["prediction_periods"],
+            DEFAULT_PREDICTION_PERIODS
+        );
     }
 }

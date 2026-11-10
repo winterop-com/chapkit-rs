@@ -24,7 +24,9 @@ pub mod prepare;
 pub mod split;
 pub mod weather;
 
-pub use backtest::{Backtest, Forecast, backtest, backtest_model, backtest_splits};
+pub use backtest::{
+    Backtest, Forecast, backtest, backtest_model, backtest_model_with, backtest_splits,
+};
 pub use mask::{MASK_INDICATOR, MaskedRange, mask_target};
 pub use metrics::{Metric, Scores, score};
 pub use prepare::{Prepare, prepare};

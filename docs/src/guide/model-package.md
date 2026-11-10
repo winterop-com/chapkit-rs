@@ -148,6 +148,9 @@ service down); `input.run` carries the resolved horizon. Both default to no find
   from `input.historic`.
 - **Models with weights** override `Model::save` and `Model::load` to store tensors in the safetensors
   checkpoint (`Checkpoint::tensors`, `Tensor`).
+- **The default horizon** is 3 periods. A model with another default declares the reserved key in its config,
+  `#[serde(default = "twelve")] prediction_periods: u32`, as a Python chapkit config subclass does; a config
+  that sets `prediction_periods` still wins.
 - **Hyperparameters** are declared with `Model::search_space` in chap-core's format and published in
   `/api/v1/info` as `hpo_search_space`.
 - **Errors**: return `Error::InvalidInput` for data the model cannot handle; the job fails with

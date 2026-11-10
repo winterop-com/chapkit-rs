@@ -181,7 +181,7 @@ where
 }
 
 /// Backtest a [`Model`] with `config`; each call gets [`RunInfo::with_periods`] of the options'
-/// periods, and no GeoJSON.
+/// periods (no extra covariates), and no GeoJSON. [`backtest_model_with`] takes the run info.
 pub fn backtest_model<M: Model>(
     model: &M,
     config: &M::Config,
@@ -190,6 +190,24 @@ pub fn backtest_model<M: Model>(
     weather: &dyn WeatherProvider,
 ) -> Result<Backtest> {
     let run = RunInfo::with_periods(u32::try_from(options.periods).unwrap_or(u32::MAX));
+    backtest_model_with(model, config, &run, data, options, weather)
+}
+
+/// [`backtest_model`] with the caller's [`RunInfo`], for models that read
+/// `additional_continuous_covariates` from it. Its `prediction_periods` is set to the options'
+/// periods, so the two cannot disagree.
+pub fn backtest_model_with<M: Model>(
+    model: &M,
+    config: &M::Config,
+    run: &RunInfo,
+    data: &DataFrame,
+    options: &Options,
+    weather: &dyn WeatherProvider,
+) -> Result<Backtest> {
+    let run = RunInfo {
+        prediction_periods: u32::try_from(options.periods).unwrap_or(u32::MAX),
+        ..run.clone()
+    };
     backtest(
         data,
         options,

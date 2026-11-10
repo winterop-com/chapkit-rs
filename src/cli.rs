@@ -186,6 +186,9 @@ pub struct HpoArgs {
     /// Searcher
     #[arg(long, value_enum, default_value_t)]
     pub method: Method,
+    /// Let grid search step through ranges
+    #[arg(long)]
+    pub grid_ranges: bool,
     /// Metric to minimize
     #[arg(long, default_value = "crps", value_parser = clap::builder::PossibleValuesParser::new(OBJECTIVES))]
     pub metric: String,

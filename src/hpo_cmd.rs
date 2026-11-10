@@ -32,6 +32,7 @@ pub(crate) fn report(model: &dyn DynModel, id: &str, args: &HpoArgs) -> Result<H
         },
         trials: args.trials,
         seed,
+        grid_ranges: args.grid_ranges,
         ..chapkit_hpo::Options::default()
     };
     hpo(
@@ -136,6 +137,7 @@ mod tests {
             backtest: backtest_args(),
             trials,
             method,
+            grid_ranges: false,
             metric: "crps".into(),
             json: false,
         }
@@ -186,6 +188,7 @@ mod tests {
     #[test]
     fn grid_and_options_and_metric() {
         let mut a = args(Method::Grid, 100);
+        a.grid_ranges = true;
         a.metric = "mae".into();
         a.backtest.config = Some(r#"{"spread": 3}"#.into());
         let r = report(&Erased(Last), "last", &a).unwrap();

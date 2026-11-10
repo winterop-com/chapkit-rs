@@ -127,6 +127,7 @@ fn grid_is_the_product_last_parameter_fastest() {
     let grid = |trials, grid_points| Options {
         method: Method::Grid,
         trials,
+        grid_ranges: true,
         grid_points,
         seed: 0,
     };
@@ -164,6 +165,7 @@ fn trials_are_ranked_and_failures_go_last() {
     let grid = Options {
         method: Method::Grid,
         trials: 100,
+        grid_ranges: true,
         ..Options::default()
     };
     let s = search(&space, &grid, Direction::Minimize, |p| {
@@ -290,4 +292,46 @@ fn searches_a_model_by_backtest_reproducibly() {
     assert_eq!(json["stop_reason"], "max_trials");
     assert_eq!(json["search_space"]["width"]["log"], true);
     assert!(json["leaderboard"][0]["trial_nr"].is_u64());
+}
+
+#[test]
+fn grid_takes_choices_only_by_default_as_chap_core() {
+    let choices = SearchSpace::new()
+        .with("a", Param::Categorical(vec![json!(1), json!(2)]))
+        .with(
+            "b",
+            Param::Categorical(vec![json!("x"), json!("y"), json!("z")]),
+        );
+    let grid = Options {
+        method: Method::Grid,
+        trials: 100,
+        ..Options::default()
+    };
+    let (c, stop) = candidates(&choices, &grid).unwrap();
+    assert_eq!((c.len(), stop), (6, StopReason::SearchExhausted));
+    // itertools.product order: the last parameter varies fastest.
+    assert_eq!(
+        (c[0]["a"].clone(), c[0]["b"].clone()),
+        (json!(1), json!("x"))
+    );
+    assert_eq!(
+        (c[1]["a"].clone(), c[1]["b"].clone()),
+        (json!(1), json!("y"))
+    );
+    let ranged = choices.with(
+        "r",
+        Param::Int {
+            low: 1,
+            high: 3,
+            step: 1,
+            log: false,
+        },
+    );
+    let err = candidates(&ranged, &grid).unwrap_err().to_string();
+    assert!(err.contains("r is a range"), "{err}");
+    let stepped = Options {
+        grid_ranges: true,
+        ..grid
+    };
+    assert_eq!(candidates(&ranged, &stepped).unwrap().0.len(), 18);
 }

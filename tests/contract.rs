@@ -1052,8 +1052,20 @@ async fn hpo_job_stores_the_search_and_can_create_the_best_config() {
     let data = backtest_data();
 
     // The grid of `scale` (0.5 to 2 by 0.25: 7 values), the best config created.
+    // chap-core's grid takes choices only, so a range needs grid_ranges.
+    let refused = json!({"data": data, "periods": 2, "splits": 3, "method": "grid", "trials": 50});
+    let (s, err, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(refused)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{err}");
+    assert!(
+        err["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("is a range"),
+        "{err}"
+    );
     let body = json!({"data": data, "periods": 2, "splits": 3, "method": "grid", "trials": 50,
-                      "metric": "mae", "create_config": true, "config_name": "best scale"});
+                      "grid_ranges": true, "metric": "mae", "create_config": true,
+                      "config_name": "best scale"});
     let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(body)).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
     assert!(

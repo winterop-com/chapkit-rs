@@ -2176,8 +2176,12 @@
                   "integer",
                   "null"
                 ],
-                "description": "Points a continuous float range is split into by `grid` (default 5).",
+                "description": "Points a continuous float range is split into by `grid` with `grid_ranges` (default 5).",
                 "minimum": 0
+              },
+              "grid_ranges": {
+                "type": "boolean",
+                "description": "Let `grid` step through ranges; chap-core's grid takes choices only (default false)."
               },
               "method": {
                 "type": [

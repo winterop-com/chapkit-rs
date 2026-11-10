@@ -201,6 +201,7 @@ Usage: my-model hpo [OPTIONS]
       (the data and backtest options of eval, then:)
       --trials <TRIALS>        Trials [default: 20]
       --method <METHOD>        Searcher [default: random] [possible values: random, grid]
+      --grid-ranges            Let grid search step through ranges
       --metric <METRIC>        Metric to minimize [default: crps] [possible values: crps, crps_log1p, crps_norm, mae, rmse, winkler_score_10_90, winkler_score_25_75, winkler_score_10_90_log1p, winkler_score_25_75_log1p]
       --json                   Print the result as JSON
 ```

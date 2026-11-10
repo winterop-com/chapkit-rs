@@ -281,7 +281,10 @@ pub struct HpoRequest {
     pub metric: Option<String>,
     /// Seed of the random searcher (default 0).
     pub seed: Option<u64>,
-    /// Points a continuous float range is split into by `grid` (default 5).
+    /// Let `grid` step through ranges; chap-core's grid takes choices only (default false).
+    #[serde(default)]
+    pub grid_ranges: bool,
+    /// Points a continuous float range is split into by `grid` with `grid_ranges` (default 5).
     pub grid_points: Option<usize>,
     /// Store the best config as a new config (default false).
     #[serde(default)]

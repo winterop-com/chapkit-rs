@@ -21,17 +21,19 @@ fn search_space(&self) -> Option<SearchSpace> {
 }
 ```
 
-| parameter | random (chap-core's `RandomSearcher`) | grid |
-|---|---|---|
-| `Categorical` | one of the values | every value |
-| `Int`, `step` | `low + k * step` | every `low + k * step` up to `high` |
-| `Int`, `log` | `floor(exp(u))`, `u` uniform on `[ln low, ln(high + 1))` | every integer |
-| `Float`, continuous | uniform | 5 evenly spaced points, ends included (`grid_points`) |
-| `Float`, `step` | `low + k * step` | every `low + k * step` up to `high` |
-| `Float`, `log` | log-uniform | 5 log-spaced points |
+| parameter | random (chap-core's `RandomSearcher`) | grid (chap-core's `GridSearcher`) | grid with `--grid-ranges` |
+|---|---|---|---|
+| `Categorical` | one of the values | every value | every value |
+| `Int`, `step` | `low + k * step` | refused | every `low + k * step` up to `high` |
+| `Int`, `log` | `floor(exp(u))`, `u` uniform on `[ln low, ln(high + 1))` | refused | every integer |
+| `Float`, continuous | uniform | refused | 5 evenly spaced points, ends included (`grid_points`) |
+| `Float`, `step` | `low + k * step` | refused | every `low + k * step` up to `high` |
+| `Float`, `log` | log-uniform | refused | 5 log-spaced points |
 
-The grid is the cartesian product, with the last parameter varying fastest. chap-core's `GridSearcher` only
-takes categorical lists; here ranges are enumerated too. chap-core's TPE searcher (Optuna) is not ported.
+The grid is the cartesian product, with the last parameter varying fastest. As chap-core's `GridSearcher`, it
+takes categorical parameters only and refuses a search space with a range, naming the parameter; random search
+covers ranges. `--grid-ranges` (`grid_ranges` in `$hpo`) lets the grid step through ranges as in the last column,
+which chap-core's grid does not do. chap-core's TPE searcher (Optuna) is not ported.
 
 ## From the command line
 
@@ -71,7 +73,8 @@ crps: 5.049861735911487 (CRPS 5.049862)
 ## As a job
 
 `POST /api/v1/ml/$hpo` takes `config_id` or `config`, `data`, the backtest settings of `$backtest`, and
-`trials`, `method` (`random`, `grid`), `metric`, `seed` (default 0), `grid_points`. It returns 202. The
+`trials`, `method` (`random`, `grid`), `metric`, `seed` (default 0), `grid_ranges`, `grid_points`. A search that
+cannot start (a grid over a range without `grid_ranges`, an invalid space) is a 400 before any job. It returns 202. The
 result (the `--json` document) is stored as an `ml_hpo` artifact. With `"create_config": true`, the best
 config is also created (named `config_name`, tagged `hpo`), and its id is written to the result as
 `best_config_id`, ready for `$train`.

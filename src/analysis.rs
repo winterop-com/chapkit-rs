@@ -197,11 +197,11 @@ pub(crate) async fn search_plan(
         &req.settings,
     )
     .await?;
-    if state.model().search_space().is_none() {
+    let Some(space) = state.model().search_space() else {
         return Err(Problem::bad_request(
             "the model has no search space (Model::search_space)",
         ));
-    }
+    };
     let metric_id = req.metric.as_deref().unwrap_or("crps");
     let metric = Metric::from_id(metric_id)
         .ok_or_else(|| Problem::bad_request(format!("unknown metric {metric_id}")))?;
@@ -227,18 +227,22 @@ pub(crate) async fn search_plan(
             .clone()
             .unwrap_or_else(|| format!("hpo {artifact_id}"))
     });
+    let options = chapkit_hpo::Options {
+        method,
+        trials,
+        seed: req.seed.unwrap_or(defaults.seed),
+        grid_ranges: req.grid_ranges,
+        grid_points: req
+            .grid_points
+            .unwrap_or(defaults.grid_points)
+            .clamp(2, 1000),
+    };
+    // Refuse a search that cannot start (a grid over a range, an invalid space) before any job.
+    chapkit_hpo::candidates(&space, &options).map_err(|e| Problem::bad_request(e.to_string()))?;
     Ok(Search {
         plan,
         metric,
-        options: chapkit_hpo::Options {
-            method,
-            trials,
-            seed: req.seed.unwrap_or(defaults.seed),
-            grid_points: req
-                .grid_points
-                .unwrap_or(defaults.grid_points)
-                .clamp(2, 1000),
-        },
+        options,
         create,
     })
 }

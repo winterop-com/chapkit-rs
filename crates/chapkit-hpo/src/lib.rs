@@ -6,10 +6,11 @@
 //!
 //! - [`Method::Random`]: chap-core's `RandomSearcher`, sampling with replacement by its rules
 //!   (log-uniform, stepped grids, `floor(exp(u))` for log integers), from a seeded generator;
-//! - [`Method::Grid`]: the cartesian product of every parameter's values, the last parameter
-//!   varying fastest (chap-core's `GridSearcher`, which takes categorical lists only). Here integer
-//!   ranges and stepped floats are enumerated too, and a continuous float range is split into
-//!   [`Options::grid_points`] points (log-spaced when `log`).
+//! - [`Method::Grid`]: chap-core's `GridSearcher`: the cartesian product of every parameter's
+//!   choices, the last parameter varying fastest. As in chap-core, it takes categorical
+//!   parameters only and refuses a space with a range. With [`Options::grid_ranges`] it also
+//!   steps through ranges: integer ranges and stepped floats value by value, a continuous float
+//!   range in [`Options::grid_points`] points (log-spaced when `log`).
 //!
 //! Candidates are drawn first, then the trials run in parallel (rayon), so a search is the same
 //! for the same seed however many threads run it. The budget is a trial count. The leaderboard
@@ -98,7 +99,9 @@ pub struct Options {
     pub trials: usize,
     /// Seed of the random searcher.
     pub seed: u64,
-    /// Points a continuous float range is split into by the grid searcher.
+    /// Let the grid searcher step through ranges (chap-core's grid refuses them).
+    pub grid_ranges: bool,
+    /// Points a continuous float range is split into by the grid searcher with `grid_ranges`.
     pub grid_points: usize,
 }
 
@@ -108,6 +111,7 @@ impl Default for Options {
             method: Method::Random,
             trials: 20,
             seed: 0,
+            grid_ranges: false,
             grid_points: 5,
         }
     }
@@ -269,6 +273,17 @@ pub fn candidates(
             Ok((out, StopReason::MaxTrials))
         }
         Method::Grid => {
+            if !options.grid_ranges
+                && let Some((name, _)) = space
+                    .0
+                    .iter()
+                    .find(|(_, p)| !matches!(p, Param::Categorical(_)))
+            {
+                return Err(Error::Invalid(format!(
+                    "grid search takes choices only, as chap-core's does, and {name} is a range; \
+                     use random search, or let the grid step through ranges"
+                )));
+            }
             let lens: Vec<usize> = space
                 .0
                 .values()

@@ -267,7 +267,29 @@ Evaluations are renamed in the app (a backtest's **More** menu, **Rename**) or t
 cdx api PATCH /v1/crud/backtests/17 --data '{"name": "Baselines (crs) 1.0.2, Laos districts weekly/global-median"}'
 ```
 
-## 12. Results
+## 12. Check `eval` against chap-core's backtest
+
+`eval` runs chap-core's backtest in-process. To check it against a backtest chap-core ran, export the dataset and
+compare the scores. chap-core's export writes weekly periods as date ranges (`2019-01-07/2019-01-13`), which `eval`
+reads as they are:
+
+```sh
+curl -s localhost:8700/v1/crud/datasets/2/csv -o laos.csv
+bin/baseline-global-median eval --data laos.csv --periods 12 --splits 7 --stride 4 --json > eval.json
+cdx api GET /v1/crud/backtest-specifications/2 > spec.json
+```
+
+Compare `.aggregate` in `eval.json` with the `aggregateMetrics` of the same model's backtest in `spec.json`. Before
+a backtest chap-core drops every location without an observed target outside the evaluation windows
+(`validate_and_filter_dataset_for_evaluation`); `eval` does the same and names the location it dropped
+(`O8DPwm0imCZ` here, observed only in the last 36 weeks).
+
+Result (136 districts, 3,514 forecasts scored): global median, seasonal median and persistence give chap-core's
+stored scores for all 13 metrics to within 1e-14 relative (CRPS 2.251861901169 for global median on both sides).
+Seasonal shift persistence matches chap-core's built-in to 3.7e-15; it differs from the stored score of the 1.0.2
+port in `ratio_above_truth` only, the difference fixed in 1.0.3 (finding 9).
+
+## 13. Results
 
 All on an Apple Silicon laptop, with the whole stack emulated as linux/amd64 (finding 5), so the times are only
 comparable with each other.

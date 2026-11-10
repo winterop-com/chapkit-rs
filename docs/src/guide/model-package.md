@@ -82,7 +82,7 @@ async fn main() -> std::process::ExitCode {
 ## What you get
 
 Running the binary serves the full chapkit API on `127.0.0.1:8000`: configs, artifacts, jobs, `$train`,
-`$predict`, `$validate`, `$predict-sync`, `$explain`, `$generate-sample-data`, health, info, system,
+`$predict`, `$validate`, `$predict-sync`, `$explain`, `$backtest`, `$hpo`, `$generate-sample-data`, health, info, system,
 metrics, SSE streams, OpenAPI at `/openapi.json` and docs at `/docs`.
 
 ## Using polars

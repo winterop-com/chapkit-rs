@@ -590,6 +590,7 @@ dependencies = [
  "chapkit-dataframe",
  "chapkit-eval",
  "chapkit-flow",
+ "chapkit-hpo",
  "chapkit-http",
  "chapkit-store",
  "chapkit-xai",
@@ -627,6 +628,7 @@ name = "chapkit-core"
 version = "0.2.0"
 dependencies = [
  "chapkit-dataframe",
+ "criterion",
  "rayon",
  "safetensors",
  "schemars",
@@ -666,6 +668,20 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "chapkit-hpo"
+version = "0.2.0"
+dependencies = [
+ "chapkit-core",
+ "chapkit-eval",
+ "criterion",
+ "rayon",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

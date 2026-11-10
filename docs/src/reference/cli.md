@@ -138,6 +138,7 @@ Commands:
   serve        Serve the model
   test         Test the running service
   eval         Backtest the model in-process
+  hpo          Search the model's hyperparameters
   healthcheck  Check the running service's health
   help         Print this message or the help of the given subcommand(s)
 
@@ -169,13 +170,16 @@ Usage: my-model eval [OPTIONS]
       --splits <SPLITS>        Splits [default: 7]
       --stride <STRIDE>        Periods between splits [default: 1]
       --retrain <RETRAIN>      Trainings [default: 1]
-      --weather <WEATHER>      Future weather (observed looks ahead) [default: climatology] [possible values: climatology, observed]
+      --weather <WEATHER>      Future weather (observed looks ahead) [default: climatology] [possible values: climatology, observed, damped-persistence]
       --keep-gaps              Keep gaps in a location's periods
       --no-pad                 Do not pad locations to the full range
+      --keep-untrained         Keep locations with no target before the test windows
       --locations <LOCATIONS>  Generated locations [default: 5]
       --history <HISTORY>      Generated periods [default: 60]
-      --seed <SEED>            Seed for generated data [default: random]
+      --seed <SEED>            Seed (generated data, search) [default: random]
+      --config <JSON>          Model options, JSON or @file
       --by-location            Scores by location
+      --json                   Print the result as JSON
 ```
 
 A backtest of the model in-process, as chap-core runs one, with chap-core's metrics: no service, no
@@ -184,6 +188,24 @@ database. `--periods`, `--splits`, `--stride` and `--retrain` are chap-core's `n
 it (`--locations` x `--history` periods, the model's covariates and period type); the seed is printed. The
 dataset is prepared as chap-core prepares it: sorted, a duplicate period in a location an error, gaps filled
 and every location padded to the full period range; `--keep-gaps` and `--no-pad` turn filling and padding
-off, and the first line of the output then says so. It
-prints the aggregate metrics and the same by horizon, and with `--by-location` a table by location. See
+off, and the first line of the output then says so. Locations with no target before the test windows are
+left out, as chap-core does, unless `--keep-untrained` is given; the `data:` line counts them. `--config` sets
+model options (JSON or `@file`, flat or as `user_option_values`). It prints the aggregate metrics and the same
+by horizon, and with `--by-location` a table by location; `--json` prints everything at full precision. See
 [Backtests in-process](../guide/eval.md).
+
+### hpo
+
+```text
+Usage: my-model hpo [OPTIONS]
+      (the data and backtest options of eval, then:)
+      --trials <TRIALS>        Trials [default: 20]
+      --method <METHOD>        Searcher [default: random] [possible values: random, grid]
+      --metric <METRIC>        Metric to minimize [default: crps] [possible values: crps, crps_log1p, crps_norm, mae, rmse, winkler_score_10_90, winkler_score_25_75, winkler_score_10_90_log1p, winkler_score_25_75_log1p]
+      --json                   Print the result as JSON
+```
+
+A random or grid search over the model's search space (`hpo_search_space`), each trial a backtest with the
+eval options, every candidate merged into `--config`. It prints the leaderboard (the best ten), the best
+options and their score; `--json` prints the whole search and the full backtest of the best config. See
+[Hyperparameter search](../guide/hpo.md).

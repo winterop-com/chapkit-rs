@@ -8,7 +8,8 @@
 //!   every location padded to the same period range;
 //! - [`split`]: `train_test_generator`'s expanding windows and `backtest`'s retraining points;
 //! - [`weather`]: the future covariates of each window ([`Climatology`], chap-core's default, and
-//!   [`Observed`], which looks ahead and is for diagnostics only);
+//!   [`DampedPersistence`], chap-core's recommended reference, and [`Observed`], which looks ahead
+//!   and is for diagnostics only);
 //! - [`metrics`]: CRPS and its log and normalised forms, MAE, RMSE, MAPE, coverage, Winkler and
 //!   ratio above truth, aggregated as chap-core's `aggregate_metrics`, and by horizon and location;
 //! - [`mask`]: target masking (`target_masked`);
@@ -23,9 +24,9 @@ pub mod prepare;
 pub mod split;
 pub mod weather;
 
-pub use backtest::{Backtest, Forecast, backtest, backtest_model};
+pub use backtest::{Backtest, Forecast, backtest, backtest_model, backtest_splits};
 pub use mask::{MASK_INDICATOR, MaskedRange, mask_target};
 pub use metrics::{Metric, Scores, score};
 pub use prepare::{Prepare, prepare};
 pub use split::{Options, Split, Splits, retrain_points, train_test_splits};
-pub use weather::{Climatology, Observed, WeatherProvider, weather_provider};
+pub use weather::{Climatology, DampedPersistence, Observed, WeatherProvider, weather_provider};

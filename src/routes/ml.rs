@@ -7,12 +7,12 @@ use chapkit_http::{ApiResult, Json, Problem, parse_ulid};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::ml;
 use crate::state::AppState;
 use crate::wire::{
-    Diagnostic, ExplainRequest, ExplainResponse, JobSubmitted, PredictRequest, TrainRequest,
-    ValidateRequest, ValidateResponse,
+    BacktestRequest, Diagnostic, ExplainRequest, ExplainResponse, HpoRequest, JobSubmitted,
+    PredictRequest, TrainRequest, ValidateRequest, ValidateResponse,
 };
+use crate::{analysis, ml};
 
 fn ulid_field(field: &str, raw: &str) -> ApiResult<String> {
     ulid::Ulid::from_string(raw).map(|u| u.to_string()).map_err(|_| {
@@ -195,6 +195,69 @@ async fn explain(
         explanation,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
     }))
+}
+
+/// Backtest the model on a dataset in-process, scored as chap-core scores it. Returns 202; the
+/// result (as `<bin> eval --json` prints it) is stored as an `ml_backtest` artifact.
+/// chapkit-rs extension; not part of Python chapkit.
+#[utoipa::path(post, path = "/$backtest", tag = "ML", request_body = BacktestRequest,
+    responses((status = ACCEPTED, body = JobSubmitted), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn backtest(
+    State(s): State<AppState>,
+    Json(req): Json<BacktestRequest>,
+) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
+    let plan = analysis::plan(&s, req.config_id.as_deref(), req.config, &req.settings).await?;
+    chapkit_http::metrics::inc("ml_backtest_jobs_total", "Backtest jobs submitted.", &[]);
+    let artifact_id = ulid::Ulid::generate().to_string();
+    let work = Box::pin(analysis::backtest(
+        s.clone(),
+        artifact_id.clone(),
+        plan,
+        req.data,
+    ));
+    let job_id = submit_eager(&s, work).await;
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(JobSubmitted {
+            job_id: job_id.to_string(),
+            artifact_id,
+            message: format!("Backtest job submitted. Job ID: {job_id}"),
+        }),
+    ))
+}
+
+/// Search the model's hyperparameters (random or grid over its `hpo_search_space`), each trial
+/// an in-process backtest. Returns 202; the trials, the best config and its backtest are stored
+/// as an `ml_hpo` artifact, and with `create_config` the best config is created.
+/// chapkit-rs extension; not part of Python chapkit.
+#[utoipa::path(post, path = "/$hpo", tag = "ML", request_body = HpoRequest,
+    responses((status = ACCEPTED, body = JobSubmitted), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn hpo(
+    State(s): State<AppState>,
+    Json(mut req): Json<HpoRequest>,
+) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
+    let artifact_id = ulid::Ulid::generate().to_string();
+    let search = analysis::search_plan(&s, &mut req, &artifact_id).await?;
+    chapkit_http::metrics::inc(
+        "ml_hpo_jobs_total",
+        "Hyperparameter search jobs submitted.",
+        &[],
+    );
+    let work = Box::pin(analysis::hpo(
+        s.clone(),
+        artifact_id.clone(),
+        search,
+        req.data,
+    ));
+    let job_id = submit_eager(&s, work).await;
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(JobSubmitted {
+            job_id: job_id.to_string(),
+            artifact_id,
+            message: format!("Hyperparameter search job submitted. Job ID: {job_id}"),
+        }),
+    ))
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
@@ -476,6 +539,8 @@ pub fn router(state: AppState) -> OpenApiRouter {
         .routes(routes!(predict))
         .routes(routes!(predict_sync))
         .routes(routes!(explain))
+        .routes(routes!(backtest))
+        .routes(routes!(hpo))
         .routes(routes!(generate_sample_data))
         .routes(routes!(validate))
         .with_state(state)

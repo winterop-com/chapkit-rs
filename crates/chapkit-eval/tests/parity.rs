@@ -9,17 +9,18 @@ use chapkit_core::{
     prediction_frame,
 };
 use chapkit_eval::{
-    Forecast, MaskedRange, Metric, Options, Prepare, Scores, backtest_model, mask_target, prepare,
-    score, train_test_splits, weather_provider,
+    Climatology, DampedPersistence, Forecast, MaskedRange, Metric, Options, Prepare, Scores,
+    backtest_model, mask_target, prepare, score, train_test_splits, weather_provider,
 };
 use serde_json::Value;
 
-const CASES: [&str; 5] = [
+const CASES: [&str; 6] = [
     "monthly",
     "weekly",
     "masked",
     "messy_monthly",
     "messy_weekly",
+    "untrained",
 ];
 
 struct Case {
@@ -73,11 +74,18 @@ fn close(got: f64, want: f64, tol: f64) -> bool {
 fn splits_match_chap_core() {
     for name in CASES {
         let c = case(name);
-        for provider in ["climatology", "observed"] {
+        for provider in ["climatology", "damped_persistence", "observed"] {
             let want = &c.fixture["splits"][provider];
             let weather = weather_provider(provider).unwrap();
             let got = train_test_splits(&c.data, &c.options, weather.as_ref()).unwrap();
             let ctx = format!("{name}/{provider}");
+            let dropped: Vec<&str> = c.fixture["dropped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            assert_eq!(got.dropped, dropped, "{ctx}");
             assert_eq!(
                 Period::parse(&got.train_last),
                 Some(period(&want["train_last"])),
@@ -520,4 +528,51 @@ fn incomplete_forecasts_are_an_error() {
     )
     .unwrap_err();
     assert!(e.to_string().contains("no forecast"), "{e}");
+}
+
+/// chap-core drops a location without a target before the test windows; kept on request.
+#[test]
+fn untrained_locations_are_dropped_as_chap_core_does() {
+    let c = case("untrained");
+    let weather = weather_provider("climatology").unwrap();
+    let bt = backtest_model(
+        &SinceLast,
+        &NoConfig {},
+        &c.data,
+        &c.options,
+        weather.as_ref(),
+    )
+    .unwrap();
+    assert_eq!(bt.dropped, ["C"]);
+    assert!(bt.forecasts.iter().all(|f| f.location != "C"));
+    let kept = Options {
+        drop_untrained: false,
+        ..c.options
+    };
+    let splits = train_test_splits(&c.data, &kept, weather.as_ref()).unwrap();
+    assert_eq!(splits.dropped, Vec::<String>::new());
+    let truth = &splits.splits[0].truth;
+    let loc = truth.require(cols::LOCATION).unwrap();
+    assert!((0..truth.n_rows()).any(|r| loc.str_at(r) == Some("C")));
+}
+
+/// Damped persistence with `phi = 0` is the climatology, except where the last anomaly is missing.
+#[test]
+fn undamped_anomaly_zero_is_the_climatology() {
+    let c = case("monthly");
+    let zero = DampedPersistence { damping: Some(0.0) };
+    let damped = train_test_splits(&c.data, &c.options, &zero).unwrap();
+    let plain = train_test_splits(&c.data, &c.options, &Climatology).unwrap();
+    let mut compared = 0;
+    for (d, p) in damped.splits.iter().zip(&plain.splits) {
+        for r in 0..d.future.n_rows() {
+            for (a, b) in d.future.row_json(r).iter().zip(p.future.row_json(r)) {
+                if !a.is_null() {
+                    assert_eq!(*a, b);
+                    compared += 1;
+                }
+            }
+        }
+    }
+    assert!(compared > 100);
 }

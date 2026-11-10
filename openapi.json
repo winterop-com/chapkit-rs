@@ -1064,6 +1064,54 @@
         }
       }
     },
+    "/api/v1/ml/$backtest": {
+      "post": {
+        "tags": [
+          "ML"
+        ],
+        "summary": "Backtest the model on a dataset in-process, scored as chap-core scores it. Returns 202; the\nresult (as `<bin> eval --json` prints it) is stored as an `ml_backtest` artifact.\nchapkit-rs extension; not part of Python chapkit.",
+        "operationId": "backtest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BacktestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSubmitted"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ml/$explain": {
       "post": {
         "tags": [
@@ -1236,6 +1284,54 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ml/$hpo": {
+      "post": {
+        "tags": [
+          "ML"
+        ],
+        "summary": "Search the model's hyperparameters (random or grid over its `hpo_search_space`), each trial\nan in-process backtest. Returns 202; the trials, the best config and its backtest are stored\nas an `ml_hpo` artifact, and with `create_config` the best config is created.\nchapkit-rs extension; not part of Python chapkit.",
+        "operationId": "hpo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HpoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSubmitted"
                 }
               }
             }
@@ -1681,6 +1777,106 @@
         ],
         "description": "An artifact in a tree view."
       },
+      "BacktestRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BacktestSettings"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Model options, as a config's `data`."
+              },
+              "config_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A stored config; or give `config`, or neither for the defaults."
+              },
+              "data": {
+                "type": "object",
+                "description": "The dataset, chapkit DataFrame JSON."
+              }
+            }
+          }
+        ],
+        "description": "`POST /api/v1/ml/$backtest`: a backtest of the model on `data`."
+      },
+      "BacktestSettings": {
+        "type": "object",
+        "description": "Backtest settings of `$backtest` and `$hpo`: chap-core's `BacktestParams` and its dataset\npreparation, each optional.",
+        "properties": {
+          "drop_untrained": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Leave out locations with no target before the test windows (default true)."
+          },
+          "fill_gaps": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Fill gaps in a location's periods (default true)."
+          },
+          "pad": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Pad locations to the full period range (default true)."
+          },
+          "periods": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Periods per forecast (default: the config's `prediction_periods`, else 3).",
+            "minimum": 0
+          },
+          "retrain": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Trainings (default 1).",
+            "minimum": 0
+          },
+          "splits": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Splits (default 7).",
+            "minimum": 0
+          },
+          "stride": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Periods between splits (default 1).",
+            "minimum": 0
+          },
+          "weather": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Future weather: `climatology` (default), `damped_persistence` or `observed`."
+          }
+        }
+      },
       "CheckResult": {
         "type": "object",
         "description": "One check's result.",
@@ -1934,6 +2130,90 @@
             "description": "Worst state over all checks."
           }
         }
+      },
+      "HpoRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BacktestSettings"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Model options, as a config's `data`."
+              },
+              "config_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A stored config whose options every candidate is merged into; or give `config`."
+              },
+              "config_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of that config (default `hpo <artifact id>`)."
+              },
+              "create_config": {
+                "type": "boolean",
+                "description": "Store the best config as a new config (default false)."
+              },
+              "data": {
+                "type": "object",
+                "description": "The dataset, chapkit DataFrame JSON."
+              },
+              "grid_points": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Points a continuous float range is split into by `grid` (default 5).",
+                "minimum": 0
+              },
+              "method": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`random` (default) or `grid`."
+              },
+              "metric": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Metric to minimize, a chap-core `metric_id` (default `crps`)."
+              },
+              "seed": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Seed of the random searcher (default 0).",
+                "minimum": 0
+              },
+              "trials": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Trials (default 20).",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "`POST /api/v1/ml/$hpo`: a hyperparameter search over the model's search space, each trial a\nbacktest on `data`."
       },
       "JobRecord": {
         "type": "object",

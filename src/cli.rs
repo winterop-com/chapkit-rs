@@ -80,6 +80,9 @@ pub enum Weather {
     Climatology,
     // As observed: looks ahead, for diagnostics only.
     Observed,
+    // Climatology plus the last anomaly, damped with the horizon.
+    #[value(alias = "damped_persistence")]
+    DampedPersistence,
 }
 
 impl Weather {
@@ -88,13 +91,14 @@ impl Weather {
         match self {
             Weather::Climatology => "climatology",
             Weather::Observed => "observed",
+            Weather::DampedPersistence => "damped_persistence",
         }
     }
 }
 
-/// `<bin> eval`: a backtest in-process, scored as chap-core scores it.
+/// The data and settings of an in-process backtest (`eval`, `hpo`).
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
-pub struct EvalArgs {
+pub struct BacktestArgs {
     /// Dataset, CSV or JSON [default: generated]
     #[arg(long, value_name = "FILE")]
     pub data: Option<PathBuf>,
@@ -119,18 +123,75 @@ pub struct EvalArgs {
     /// Do not pad locations to the full range
     #[arg(long)]
     pub no_pad: bool,
+    /// Keep locations with no target before the test windows
+    #[arg(long)]
+    pub keep_untrained: bool,
     /// Generated locations
     #[arg(long, default_value_t = 5)]
     pub locations: usize,
     /// Generated periods
     #[arg(long, default_value_t = 60)]
     pub history: usize,
-    /// Seed for generated data [default: random]
+    /// Seed (generated data, search) [default: random]
     #[arg(long)]
     pub seed: Option<u64>,
+    /// Model options, JSON or @file
+    #[arg(long, value_name = "JSON")]
+    pub config: Option<String>,
+}
+
+/// `<bin> eval`: a backtest in-process, scored as chap-core scores it.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct EvalArgs {
+    #[command(flatten)]
+    pub backtest: BacktestArgs,
     /// Scores by location
     #[arg(long)]
     pub by_location: bool,
+    /// Print the result as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// A hyperparameter searcher.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Method {
+    #[default]
+    Random,
+    Grid,
+}
+
+/// The metrics a search can minimize: chap-core's proper scoring rules.
+pub const OBJECTIVES: [&str; 9] = [
+    "crps",
+    "crps_log1p",
+    "crps_norm",
+    "mae",
+    "rmse",
+    "winkler_score_10_90",
+    "winkler_score_25_75",
+    "winkler_score_10_90_log1p",
+    "winkler_score_25_75_log1p",
+];
+
+/// `<bin> hpo`: a hyperparameter search over the model's search space, each trial an in-process
+/// backtest.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct HpoArgs {
+    #[command(flatten)]
+    pub backtest: BacktestArgs,
+    /// Trials
+    #[arg(long, default_value_t = 20)]
+    pub trials: usize,
+    /// Searcher
+    #[arg(long, value_enum, default_value_t)]
+    pub method: Method,
+    /// Metric to minimize
+    #[arg(long, default_value = "crps", value_parser = clap::builder::PossibleValuesParser::new(OBJECTIVES))]
+    pub metric: String,
+    /// Print the result as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// The library's subcommands.
@@ -142,6 +203,8 @@ pub enum Command {
     Test(TestArgs),
     /// Backtest the model in-process
     Eval(EvalArgs),
+    /// Search the model's hyperparameters
+    Hpo(HpoArgs),
     /// Check the running service's health
     Healthcheck(Address),
 }
@@ -281,10 +344,18 @@ mod tests {
         let Command::Eval(e) = parse(&["bin", "eval"]).unwrap().command else {
             panic!("expected eval")
         };
-        assert_eq!((e.periods, e.splits, e.stride, e.retrain), (3, 7, 1, 1));
-        assert_eq!(e.weather, Weather::Climatology);
-        assert_eq!(e.data, None);
-        assert!(!e.keep_gaps && !e.no_pad);
+        assert_eq!(
+            (
+                e.backtest.periods,
+                e.backtest.splits,
+                e.backtest.stride,
+                e.backtest.retrain
+            ),
+            (3, 7, 1, 1)
+        );
+        assert_eq!(e.backtest.weather, Weather::Climatology);
+        assert_eq!(e.backtest.data, None);
+        assert!(!e.backtest.keep_gaps && !e.backtest.no_pad);
         let Command::Eval(e) = parse(&[
             "bin",
             "eval",
@@ -300,16 +371,35 @@ mod tests {
         else {
             panic!("expected eval")
         };
-        assert_eq!(e.data, Some(PathBuf::from("d.csv")));
-        assert_eq!((e.weather.id(), e.retrain), ("observed", 2));
+        assert_eq!(e.backtest.data, Some(PathBuf::from("d.csv")));
+        assert_eq!(
+            (e.backtest.weather.id(), e.backtest.retrain),
+            ("observed", 2)
+        );
         assert!(parse(&["bin", "eval", "--weather", "mstl"]).is_err());
+        for name in ["damped-persistence", "damped_persistence"] {
+            let Command::Eval(e) = parse(&["bin", "eval", "--weather", name]).unwrap().command
+            else {
+                panic!("expected eval")
+            };
+            assert_eq!(e.backtest.weather.id(), "damped_persistence");
+        }
         let Command::Eval(e) = parse(&["bin", "eval", "--keep-gaps", "--no-pad"])
             .unwrap()
             .command
         else {
             panic!("expected eval")
         };
-        assert!(e.keep_gaps && e.no_pad);
+        assert!(e.backtest.keep_gaps && e.backtest.no_pad);
+        assert!(!e.json && e.backtest.config.is_none());
+        let Command::Eval(e) = parse(&["bin", "eval", "--json", "--config", "@c.json"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected eval")
+        };
+        assert!(e.json);
+        assert_eq!(e.backtest.config.as_deref(), Some("@c.json"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ the committed OpenAPI document with a Python comparison, and chap-core end-to-en
 
 Also done: the turso storage backend (feature `turso`), passing the same store suite and HTTP contract; a
 shared container image for model packages (published to GHCR, run as managed models in chap-devops); a
-command line in every model binary (`serve`, `test`, `eval`, `healthcheck`).
+command line in every model binary (`serve`, `test`, `eval`, `hpo`, `healthcheck`).
 
 Next:
 
@@ -18,10 +18,14 @@ Next:
     aggregate, by horizon and by location), the observed and climatology weather providers, target
     masking, and chap-core's dataset preparation (`fill_missing=True`: gaps filled, locations padded); parity with fixtures chap-core generates (`make eval-fixtures`), to 1e-12; `<bin> eval` on a
     CSV or JSON dataset or generated data.
-  - Next: chap-core's other weather providers (damped persistence, MSTL + ARIMA); target masking on the
-    command line; a Rust-only `$backtest` job endpoint, like `$explain`; checkpoint provenance (splits that
-    start before a pre-trained model's `trained_until` are flagged); refreshing the fixtures on every
-    chap-core release; the workbench UI below, to show the scores and forecasts.
+  - Done since: the damped persistence weather provider; chap-core's untrained-location filter;
+    `eval --json` (every score at full precision, to compare with chap-core's stored `aggregateMetrics`)
+    and `eval --config` (model options); every period form chap-core reads, including the week ranges of
+    its CSV export; the Rust-only `$backtest` job endpoint, storing the result as an `ml_backtest` artifact.
+  - Next: target masking on the command line; checkpoint provenance (splits that start before a
+    pre-trained model's `trained_until` are flagged); refreshing the fixtures on every chap-core release;
+    the workbench UI below, to show the scores and forecasts. MSTL + ARIMA weather stays out: it is
+    statsforecast's AutoARIMA search, a large port of its own.
   - Later, with chap-core: a `$predict-splits` endpoint returning every split's forecasts in one call, so
     chap-core's own backtest makes one round trip per training instead of one per split and still scores
     the forecasts itself.
@@ -34,8 +38,10 @@ Next:
 
 - **Lagged explainer features**: perturb covariates at `t-1`, `t-2` from the historic frame
   ([Explainers](../design/explainers.md)).
-- **Hyperparameter search** (`$hpo`): random and grid search over the chap-core search space, each trial an
-  in-process backtest, trials in parallel inside one job. Parked until chap-core's own HPO matures; needs the
-  backtests above.
+- **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
+  the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by
+  seed; `<bin> hpo` and the `$hpo` job endpoint, which can create the best config. About 2000 trials per
+  second for a baseline-sized model. Next: an adaptive searcher (chap-core's TPE), early stopping of poor
+  trials, and search results in the workbench UI.
 - **Pre-trained models end to end**: a model package that ships a checkpoint, and a backtest check of
   `trained_until` against the test periods.

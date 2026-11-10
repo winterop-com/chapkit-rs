@@ -44,6 +44,18 @@ impl Model for MeanModel {
         ModelInfo::default()
     }
 
+    fn search_space(&self) -> Option<chapkit::SearchSpace> {
+        Some(chapkit::SearchSpace::new().with(
+            "scale",
+            chapkit::Param::Float {
+                low: 0.5,
+                high: 2.0,
+                step: Some(0.25),
+                log: false,
+            },
+        ))
+    }
+
     fn train(&self, _: &MeanConfig, input: TrainInput<'_>) -> ModelResult<HashMap<String, f64>> {
         let y = input.data.f64_column(cols::DISEASE_CASES)?;
         Ok(input
@@ -535,6 +547,18 @@ impl Model for GeoModel {
         ModelInfo::default()
     }
 
+    fn search_space(&self) -> Option<chapkit::SearchSpace> {
+        Some(chapkit::SearchSpace::new().with(
+            "scale",
+            chapkit::Param::Float {
+                low: 0.5,
+                high: 2.0,
+                step: Some(0.25),
+                log: false,
+            },
+        ))
+    }
+
     fn train(&self, _: &MeanConfig, _: TrainInput<'_>) -> ModelResult<f64> {
         Ok(1.0)
     }
@@ -783,6 +807,18 @@ impl Model for SlowModel {
         ModelInfo::default()
     }
 
+    fn search_space(&self) -> Option<chapkit::SearchSpace> {
+        Some(chapkit::SearchSpace::new().with(
+            "scale",
+            chapkit::Param::Float {
+                low: 0.5,
+                high: 2.0,
+                step: Some(0.25),
+                log: false,
+            },
+        ))
+    }
+
     fn train(&self, _: &MeanConfig, _: TrainInput<'_>) -> ModelResult<f64> {
         std::thread::sleep(std::time::Duration::from_millis(300));
         Ok(1.0)
@@ -852,4 +888,267 @@ async fn max_concurrency_limits_running_jobs() {
     };
     check_two_jobs_at_once(chapkit::Service::new("slow", "Slow", SlowModel).with_serve_args(&args))
         .await;
+}
+
+/// Two locations x 24 months with a seasonal target, for backtests.
+fn backtest_data() -> Value {
+    let mut rows = vec![];
+    for (loc, base) in [("A", 10.0), ("B", 30.0)] {
+        for i in 0..24 {
+            let y = base + f64::from(i % 12) * 2.0 + f64::from(i % 5);
+            rows.push(json!([
+                format!("{}-{:02}", 2022 + i / 12, i % 12 + 1),
+                loc,
+                y,
+                100.0 + f64::from(i)
+            ]));
+        }
+    }
+    json!({"columns": ["time_period", "location", "disease_cases", "rainfall"], "data": rows})
+}
+
+/// Poll a job until it is done; its final record.
+async fn finished(app: &Router, sub: &Value) -> Value {
+    let uri = format!("/api/v1/jobs/{}", sub["job_id"].as_str().unwrap());
+    for _ in 0..500 {
+        let (_, job, _) = call(app, "GET", &uri, None).await;
+        if job["status"] != "pending" && job["status"] != "running" {
+            return job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("job {uri} did not finish");
+}
+
+#[tokio::test]
+async fn backtest_job_stores_the_eval_result() {
+    let app = app().await;
+    let (_, info, _) = call(&app, "GET", "/api/v1/info", None).await;
+    assert!(
+        info["extensions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("$backtest"))
+    );
+    let data = backtest_data();
+
+    // Inline model options, chap-core's backtest settings.
+    let body =
+        json!({"config": {"scale": 2.0}, "data": data, "periods": 2, "splits": 3, "stride": 2});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert!(
+        sub["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Backtest job submitted")
+    );
+    let job = finished(&app, &sub).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let uri = format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap());
+    let (s, artifact, _) = call(&app, "GET", &uri, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(artifact["level"], 0);
+    assert_eq!(artifact["data"]["type"], "ml_backtest");
+    assert_eq!(artifact["data"]["content_type"], "application/json");
+    let result = &artifact["data"]["content"];
+    assert_eq!(result["model"], "mean");
+    assert_eq!(result["config"]["scale"], 2.0);
+    assert_eq!(result["config"]["prediction_periods"], 2);
+    assert_eq!(
+        result["options"],
+        json!({"periods": 2, "splits": 3, "stride": 2, "retrain": 1, "weather": "climatology",
+               "fill_gaps": true, "pad": true, "drop_untrained": true})
+    );
+    assert_eq!(result["data"]["source"], "request");
+    assert_eq!(result["data"]["locations"], 2);
+    assert_eq!(result["rows"], 12);
+    let doubled = result["aggregate"]["crps"].as_f64().unwrap();
+    assert!(doubled > 0.0);
+    assert_eq!(result["by_horizon"].as_array().unwrap().len(), 2);
+    assert_eq!(result["by_location"][1]["location"], "B");
+    let (_, tree, _) = call(&app, "GET", &format!("{uri}/$tree"), None).await;
+    assert_eq!(tree["level_label"], "ml_backtest");
+    assert!(tree["data"].get("content").is_none());
+
+    // A stored config; the scores follow its options.
+    let (_, cfg, _) = call(
+        &app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": "unscaled", "data": {"prediction_periods": 2}})),
+    )
+    .await;
+    let body = json!({"config_id": cfg["id"], "data": data, "splits": 3, "stride": 2, "weather": "damped_persistence"});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let (_, artifact, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    let result = &artifact["data"]["content"];
+    assert_eq!(artifact["data"]["metadata"]["config_id"], cfg["id"]);
+    assert_eq!(result["options"]["periods"], 2, "from the config");
+    assert_eq!(result["options"]["weather"], "damped_persistence");
+    assert!(result["aggregate"]["crps"].as_f64().unwrap() < doubled);
+
+    // Bad requests are refused before a job starts; data that cannot be split fails the job.
+    for (body, status) in [
+        (
+            json!({"config": {}, "config_id": cfg["id"], "data": data}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"config_id": ulid::Ulid::generate().to_string(), "data": data}),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            json!({"data": data, "weather": "mstl_arima"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (json!({"data": data, "retrain": 9}), StatusCode::BAD_REQUEST),
+        (
+            json!({"config": {"scale": "big"}, "data": data}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (s, p, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+        assert_eq!(s, status, "{p}");
+    }
+    let (s, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$backtest",
+        Some(json!({"data": data, "splits": 30})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let job = finished(&app, &sub).await;
+    assert_eq!(job["status"], "failed");
+    assert!(
+        job["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("too few"),
+        "{job}"
+    );
+}
+
+#[tokio::test]
+async fn hpo_job_stores_the_search_and_can_create_the_best_config() {
+    let app = app().await;
+    let (_, info, _) = call(&app, "GET", "/api/v1/info", None).await;
+    assert!(
+        info["extensions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("$hpo"))
+    );
+    assert_eq!(info["hpo_search_space"]["scale"]["step"], 0.25);
+    let data = backtest_data();
+
+    // The grid of `scale` (0.5 to 2 by 0.25: 7 values), the best config created.
+    let body = json!({"data": data, "periods": 2, "splits": 3, "method": "grid", "trials": 50,
+                      "metric": "mae", "create_config": true, "config_name": "best scale"});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert!(
+        sub["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Hyperparameter search job submitted")
+    );
+    let job = finished(&app, &sub).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let uri = format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap());
+    let (_, artifact, _) = call(&app, "GET", &uri, None).await;
+    assert_eq!(artifact["data"]["type"], "ml_hpo");
+    let result = &artifact["data"]["content"];
+    assert_eq!(result["metric"], "mae");
+    let search = &result["search"];
+    assert_eq!(search["method"], "grid");
+    assert_eq!(search["n_trials"], 7);
+    assert_eq!(search["stop_reason"], "search_exhausted");
+    assert_eq!(search["leaderboard"].as_array().unwrap().len(), 7);
+    let best = search["best_params"]["scale"].as_f64().unwrap();
+    assert_eq!(result["best_config"]["scale"], best);
+    assert_eq!(result["best"]["aggregate"]["mae"], search["best_score"]);
+    let scores: Vec<f64> = search["leaderboard"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["score"].as_f64().unwrap())
+        .collect();
+    assert!(scores.windows(2).all(|w| w[0] <= w[1]));
+    let (_, tree, _) = call(&app, "GET", &format!("{uri}/$tree"), None).await;
+    assert_eq!(tree["level_label"], "ml_hpo");
+
+    // The created config holds the best options; training with it works as with any config.
+    let best_id = result["best_config_id"].as_str().unwrap();
+    let (s, cfg, _) = call(&app, "GET", &format!("/api/v1/configs/{best_id}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(cfg["name"], "best scale");
+    assert_eq!(cfg["data"]["scale"], best);
+    let (s, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$train",
+        Some(json!({"config_id": best_id, "data": data})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+
+    // Random search from a stored config, without creating one; reproducible by seed.
+    let (_, base, _) = call(
+        &app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": "base", "data": {"prediction_periods": 2}})),
+    )
+    .await;
+    let mut boards = vec![];
+    for _ in 0..2 {
+        let body =
+            json!({"config_id": base["id"], "data": data, "splits": 3, "trials": 6, "seed": 4});
+        let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(body)).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+        assert_eq!(finished(&app, &sub).await["status"], "completed");
+        let (_, a, _) = call(
+            &app,
+            "GET",
+            &format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap()),
+            None,
+        )
+        .await;
+        let content = &a["data"]["content"];
+        assert!(content.get("best_config_id").is_none());
+        assert_eq!(content["search"]["method"], "random");
+        assert_eq!(content["metric"], "crps");
+        assert_eq!(a["data"]["metadata"]["config_id"], base["id"]);
+        let board: Vec<(Value, Value)> = content["search"]["leaderboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["params"].clone(), t["score"].clone()))
+            .collect();
+        boards.push(board);
+    }
+    assert_eq!(boards[0], boards[1]);
+    assert_eq!(boards[0].len(), 6);
+
+    for body in [
+        json!({"data": data, "metric": "mape"}),
+        json!({"data": data, "metric": "nope"}),
+        json!({"data": data, "method": "tpe"}),
+        json!({"data": data, "trials": 0}),
+        json!({"data": data, "weather": "mstl_arima"}),
+    ] {
+        let (s, p, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(body)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+    }
 }

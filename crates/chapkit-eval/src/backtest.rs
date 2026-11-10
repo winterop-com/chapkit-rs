@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::metrics::{Scores, score};
-use crate::split::{Options, Split, retrain_points, train_test_splits};
+use crate::split::{Options, Split, Splits, retrain_points, train_test_splits};
 use crate::weather::WeatherProvider;
 
 /// One forecast cell: a location and period of a split, with its samples.
@@ -37,6 +37,8 @@ pub struct Backtest {
     pub trained_at: Vec<usize>,
     /// Every split's forecasts, split by split.
     pub forecasts: Vec<Forecast>,
+    /// Locations left out ([`Options::drop_untrained`]).
+    pub dropped: Vec<String>,
 }
 
 impl Backtest {
@@ -122,6 +124,22 @@ where
     Predict: Fn(&T, &DataFrame, &DataFrame) -> Result<DataFrame> + Sync,
 {
     let splits = train_test_splits(data, options, weather)?;
+    backtest_splits(&splits, options, train, predict)
+}
+
+/// [`backtest`] on splits made once with [`train_test_splits`]: a search that backtests many
+/// configs on one dataset splits it, and forecasts its weather, only once.
+pub fn backtest_splits<T, Train, Predict>(
+    splits: &Splits,
+    options: &Options,
+    train: Train,
+    predict: Predict,
+) -> Result<Backtest>
+where
+    T: Send + Sync,
+    Train: Fn(&DataFrame) -> Result<T> + Sync,
+    Predict: Fn(&T, &DataFrame, &DataFrame) -> Result<DataFrame> + Sync,
+{
     let points = retrain_points(options.splits, options.retrain);
     // The first training uses the train set; later ones the split's history (chap-core's rule).
     let trained = points
@@ -150,10 +168,15 @@ where
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Backtest {
-        train_last: splits.train_last,
-        split_last: splits.splits.into_iter().map(|s| s.historic_last).collect(),
+        train_last: splits.train_last.clone(),
+        split_last: splits
+            .splits
+            .iter()
+            .map(|s| s.historic_last.clone())
+            .collect(),
         trained_at: points,
         forecasts: forecasts.into_iter().flatten().collect(),
+        dropped: splits.dropped.clone(),
     })
 }
 

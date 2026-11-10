@@ -27,6 +27,10 @@ pub struct Options {
     pub retrain: usize,
     /// Dataset preparation before splitting ([`prepare`]).
     pub prepare: Prepare,
+    /// Leave out locations without an observed target before the test windows, as chap-core's
+    /// REST backtest does (`validate_and_filter_dataset_for_evaluation`). Their observations
+    /// still count in `crps_norm`'s range, as there.
+    pub drop_untrained: bool,
 }
 
 impl Default for Options {
@@ -37,6 +41,7 @@ impl Default for Options {
             stride: 1,
             retrain: 1,
             prepare: Prepare::default(),
+            drop_untrained: true,
         }
     }
 }
@@ -96,6 +101,8 @@ pub struct Splits {
     pub train: DataFrame,
     /// The test windows, in order.
     pub splits: Vec<Split>,
+    /// Locations left out: no observed target before the test windows ([`Options::drop_untrained`]).
+    pub dropped: Vec<String>,
 }
 
 /// The periods of a dataset: sorted distinct periods and each row's position among them.
@@ -197,6 +204,12 @@ pub fn train_test_splits(
     if data.has(MASK_INDICATOR) {
         check_mask_outside_window(data, &panel, window)?;
     }
+    let (kept, panel, dropped) = if options.drop_untrained {
+        drop_untrained(data, panel, split_idx, options)?
+    } else {
+        (None, panel, Vec::new())
+    };
+    let data = kept.as_ref().unwrap_or(data);
     let label = |i: usize| panel.labels.get(i).cloned().unwrap_or_default();
     let (train, _) = rows(data, &panel, |p| p <= split_idx)?;
     let splits = (0..options.splits)
@@ -232,7 +245,54 @@ pub fn train_test_splits(
         train_last: label(split_idx),
         train,
         splits,
+        dropped,
     })
+}
+
+/// chap-core's `validate_and_filter_dataset_for_evaluation`: keep the locations with an observed
+/// target in a period up to `split_idx`; the rest are returned by name. `None` when every
+/// location is kept.
+fn drop_untrained(
+    data: &DataFrame,
+    panel: Panel,
+    split_idx: usize,
+    options: &Options,
+) -> Result<(Option<DataFrame>, Panel, Vec<String>)> {
+    let target = data.f64_column(cols::DISEASE_CASES)?;
+    let mut dropped = Vec::new();
+    let mut keep = Vec::with_capacity(data.n_rows());
+    for (location, idx) in data.group_indices(cols::LOCATION)? {
+        let trains = idx.iter().any(|&r| {
+            panel.row_period.get(r).is_some_and(|&p| p <= split_idx)
+                && target.get(r).is_some_and(|v| !v.is_nan())
+        });
+        if trains {
+            keep.extend(idx);
+        } else {
+            dropped.push(location);
+        }
+    }
+    if dropped.is_empty() {
+        return Ok((None, panel, dropped));
+    }
+    if keep.is_empty() {
+        return Err(Error::invalid(format!(
+            "No org unit has target data left to train on: the evaluation window \
+             (n_periods={}, n_splits={}, stride={}) covers the whole dataset.",
+            options.periods, options.splits, options.stride
+        )));
+    }
+    keep.sort_unstable();
+    let row_period = keep
+        .iter()
+        .filter_map(|&r| panel.row_period.get(r))
+        .copied()
+        .collect();
+    let panel = Panel {
+        row_period,
+        ..panel
+    };
+    Ok((Some(data.take(&keep)?), panel, dropped))
 }
 
 #[cfg(test)]
@@ -261,5 +321,41 @@ mod tests {
         };
         assert!(o.validate().is_err());
         assert_eq!(Options::default().window(), 9);
+    }
+
+    #[test]
+    fn no_location_left_to_train_is_chap_cores_error() {
+        use crate::weather::Climatology;
+        let mut data = DataFrame::new();
+        let periods: Vec<String> = (1..=6).map(|m| format!("2023-{m:02}")).collect();
+        data.push_column(
+            cols::TIME_PERIOD,
+            chapkit_core::Column::from_strs(periods.iter().map(String::as_str)),
+        )
+        .unwrap();
+        data.push_column(cols::LOCATION, chapkit_core::Column::from_strs(["A"; 6]))
+            .unwrap();
+        data.push_column(
+            cols::DISEASE_CASES,
+            chapkit_core::Column::Float(vec![None, None, None, Some(2.0), Some(3.0), None]),
+        )
+        .unwrap();
+        let options = Options {
+            periods: 2,
+            splits: 2,
+            ..Options::default()
+        };
+        let e = train_test_splits(&data, &options, &Climatology)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("No org unit has target data left to train on"),
+            "{e}"
+        );
+        let kept = Options {
+            drop_untrained: false,
+            ..options
+        };
+        assert!(train_test_splits(&data, &kept, &Climatology).is_ok());
     }
 }

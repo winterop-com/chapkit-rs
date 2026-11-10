@@ -14,6 +14,7 @@ chapkit-flow.workspace = true
 chapkit-store.workspace = true
 chapkit-xai.workspace = true
 chapkit-eval.workspace = true
+chapkit-hpo.workspace = true
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -92,6 +93,7 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 chapkit-xai = { path = "crates/chapkit-xai" }
 chapkit-eval = { path = "crates/chapkit-eval" }
+chapkit-hpo = { path = "crates/chapkit-hpo" }
 async-trait = "0.1"
 futures-util = "0.3"
 turso = { version = "0.8.3", default-features = false }

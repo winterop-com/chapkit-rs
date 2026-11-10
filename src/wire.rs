@@ -221,3 +221,71 @@ pub struct ValidateResponse {
     pub valid: bool,
     pub diagnostics: Vec<Diagnostic>,
 }
+
+/// Backtest settings of `$backtest` and `$hpo`: chap-core's `BacktestParams` and its dataset
+/// preparation, each optional.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct BacktestSettings {
+    /// Periods per forecast (default: the config's `prediction_periods`, else 3).
+    pub periods: Option<usize>,
+    /// Splits (default 7).
+    pub splits: Option<usize>,
+    /// Periods between splits (default 1).
+    pub stride: Option<usize>,
+    /// Trainings (default 1).
+    pub retrain: Option<usize>,
+    /// Future weather: `climatology` (default), `damped_persistence` or `observed`.
+    pub weather: Option<String>,
+    /// Fill gaps in a location's periods (default true).
+    pub fill_gaps: Option<bool>,
+    /// Pad locations to the full period range (default true).
+    pub pad: Option<bool>,
+    /// Leave out locations with no target before the test windows (default true).
+    pub drop_untrained: Option<bool>,
+}
+
+/// `POST /api/v1/ml/$backtest`: a backtest of the model on `data`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct BacktestRequest {
+    /// A stored config; or give `config`, or neither for the defaults.
+    pub config_id: Option<String>,
+    /// Model options, as a config's `data`.
+    #[schema(value_type = Option<Object>)]
+    pub config: Option<Value>,
+    /// The dataset, chapkit DataFrame JSON.
+    #[schema(value_type = Object)]
+    pub data: DataFrame,
+    #[serde(flatten)]
+    pub settings: BacktestSettings,
+}
+
+/// `POST /api/v1/ml/$hpo`: a hyperparameter search over the model's search space, each trial a
+/// backtest on `data`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct HpoRequest {
+    /// A stored config whose options every candidate is merged into; or give `config`.
+    pub config_id: Option<String>,
+    /// Model options, as a config's `data`.
+    #[schema(value_type = Option<Object>)]
+    pub config: Option<Value>,
+    /// The dataset, chapkit DataFrame JSON.
+    #[schema(value_type = Object)]
+    pub data: DataFrame,
+    #[serde(flatten)]
+    pub settings: BacktestSettings,
+    /// Trials (default 20).
+    pub trials: Option<usize>,
+    /// `random` (default) or `grid`.
+    pub method: Option<String>,
+    /// Metric to minimize, a chap-core `metric_id` (default `crps`).
+    pub metric: Option<String>,
+    /// Seed of the random searcher (default 0).
+    pub seed: Option<u64>,
+    /// Points a continuous float range is split into by `grid` (default 5).
+    pub grid_points: Option<usize>,
+    /// Store the best config as a new config (default false).
+    #[serde(default)]
+    pub create_config: bool,
+    /// Name of that config (default `hpo <artifact id>`).
+    pub config_name: Option<String>,
+}

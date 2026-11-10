@@ -1,0 +1,26 @@
+[package]
+name = "chapkit-hpo"
+description = "Hyperparameter search for chapkit-rs models: random and grid search over chap-core search spaces, scored by in-process backtests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+chapkit-core.workspace = true
+chapkit-eval.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+schemars.workspace = true
+
+[[bench]]
+name = "search"
+harness = false
+
+[lints]
+workspace = true

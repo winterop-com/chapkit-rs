@@ -24,6 +24,7 @@
 - [Errors and panics](design/errors.md)
 - [OpenAPI as a reviewed artifact](design/openapi.md)
 - [Explainers](design/explainers.md)
+- [Proposal for chap-core: `$predict-splits`](design/predict-splits.md)
 
 # Guide
 
@@ -32,6 +33,7 @@
 - [Docker](guide/docker.md)
 - [Testing with chap-core](guide/chap-core.md)
 - [Backtests in-process](guide/eval.md)
+- [Hyperparameter search](guide/hpo.md)
 - [Full stack: chap-core, DHIS2, Modeling App](guide/full-stack.md)
 - [Sample data](guide/sample-data.md)
 

@@ -33,7 +33,11 @@ async fn fetch(s: &AppState, id: &str) -> ApiResult<ArtifactOut> {
 }
 
 fn node(a: ArtifactOut, children: Option<Vec<ArtifactTreeNode>>) -> ArtifactTreeNode {
-    let label = level_label(a.level);
+    // Analysis results are roots of their own kind, not trainings.
+    let label = match str_field(&a.data, "type") {
+        Some(t @ (crate::analysis::BACKTEST_TYPE | crate::analysis::HPO_TYPE)) => t.to_owned(),
+        _ => level_label(a.level),
+    };
     ArtifactTreeNode {
         artifact: ArtifactOut {
             data: without_content(&a.data),

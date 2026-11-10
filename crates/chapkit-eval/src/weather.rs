@@ -4,7 +4,12 @@
 //! As in chap-core, a provider that does not leak sees only the history, and only the seasonal
 //! numeric covariates; `population` and non-numeric columns are carried forward from each
 //! location's last observation. A provider that leaks ([`Observed`]) is given the window's own
-//! observations instead. Not yet ported: chap-core's damped persistence and MSTL + ARIMA providers.
+//! observations instead. [`DampedPersistence`] adds the last anomaly from the climatology, damped
+//! with the horizon.
+//!
+//! Not ported: chap-core's MSTL + ARIMA provider. It forecasts each series with statsforecast's
+//! AutoARIMA, a stepwise search over ARIMA orders with its own fitting and selection rules; a
+//! port with parity is a large piece of work of its own.
 
 use std::collections::HashMap;
 
@@ -35,7 +40,7 @@ pub struct WeatherInput<'a> {
 
 /// A source of future covariates.
 pub trait WeatherProvider: Send + Sync {
-    /// chap-core's provider id (`climatology`, `observed`).
+    /// chap-core's provider id (`climatology`, `damped_persistence`, `observed`).
     fn id(&self) -> &'static str;
 
     /// True when the provider reads the window's own observations (look-ahead). Only then is it
@@ -55,6 +60,7 @@ pub fn weather_provider(id: &str) -> Option<Box<dyn WeatherProvider>> {
     match id {
         "climatology" => Some(Box::new(Climatology)),
         "observed" => Some(Box::new(Observed)),
+        "damped_persistence" => Some(Box::new(DampedPersistence::default())),
         _ => None,
     }
 }
@@ -116,57 +122,146 @@ impl WeatherProvider for Observed {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Climatology;
 
+/// A location's seasonal fit of one covariate: the mean of each observed season, and for the
+/// seasons never observed the unweighted mean of the observed seasons' means.
+struct SeasonalFit {
+    means: Vec<f64>,
+}
+
+impl SeasonalFit {
+    fn new(
+        input: &WeatherInput<'_>,
+        col: &Column,
+        name: &str,
+        location: &str,
+        idx: &[usize],
+    ) -> Result<Self> {
+        let n_seasons = input
+            .historic_periods
+            .first()
+            .map_or(12, |p| p.periods_per_year() as usize);
+        let mut sum = vec![0.0; n_seasons];
+        let mut count = vec![0usize; n_seasons];
+        for &r in idx {
+            let (Some(v), Some(p)) = (col.f64_at(r), input.historic_periods.get(r)) else {
+                continue;
+            };
+            if v.is_nan() {
+                continue;
+            }
+            if let (Some(s), Some(c)) = (sum.get_mut(season(p)), count.get_mut(season(p))) {
+                *s += v;
+                *c += 1;
+            }
+        }
+        let observed: Vec<f64> = sum
+            .iter()
+            .zip(&count)
+            .filter(|(_, c)| **c > 0)
+            .map(|(s, c)| s / *c as f64)
+            .collect();
+        if observed.is_empty() {
+            return Err(Error::invalid(format!(
+                "cannot fit a climatology for '{name}' in {location}: every value is missing"
+            )));
+        }
+        let fallback = observed.iter().sum::<f64>() / observed.len() as f64;
+        let means = sum
+            .iter()
+            .zip(&count)
+            .map(|(s, c)| if *c > 0 { s / *c as f64 } else { fallback })
+            .collect();
+        Ok(Self { means })
+    }
+
+    fn at(&self, p: &Period) -> f64 {
+        self.means.get(season(p)).copied().unwrap_or(f64::NAN)
+    }
+}
+
+/// A period's season: 0-based month or week of year (week 53 pooled with 52).
+fn season(p: &Period) -> usize {
+    (p.period_of_year() as usize).saturating_sub(1)
+}
+
 impl WeatherProvider for Climatology {
     fn id(&self) -> &'static str {
         "climatology"
     }
 
     fn future_weather(&self, input: &WeatherInput<'_>) -> Result<Vec<Column>> {
-        let n_seasons = input
-            .historic_periods
-            .first()
-            .map_or(12, |p| p.periods_per_year() as usize);
-        let season = |p: &Period| (p.period_of_year() as usize).saturating_sub(1);
         let rows = input.locations.len() * input.periods.len();
         let mut out = Vec::with_capacity(input.covariates.len());
         for name in input.covariates {
             let col = input.historic.require(name)?;
             let mut values = Vec::with_capacity(rows);
             for (location, idx) in input.locations {
-                let mut sum = vec![0.0; n_seasons];
-                let mut count = vec![0usize; n_seasons];
-                for &r in idx {
-                    let (Some(v), Some(p)) = (col.f64_at(r), input.historic_periods.get(r)) else {
-                        continue;
-                    };
-                    if v.is_nan() {
-                        continue;
-                    }
-                    if let (Some(s), Some(c)) = (sum.get_mut(season(p)), count.get_mut(season(p))) {
-                        *s += v;
-                        *c += 1;
-                    }
-                }
-                let observed: Vec<f64> = sum
+                let fit = SeasonalFit::new(input, col, name, location, idx)?;
+                values.extend(input.periods.iter().map(|p| Some(fit.at(p))));
+            }
+            out.push(Column::Float(values));
+        }
+        Ok(out)
+    }
+}
+
+/// chap-core's damped persistence: the climatology plus the last anomaly from it, damped toward
+/// zero with the horizon, `climatology(T+h) + phi^h * (y(T) - climatology(T))`. `phi` is the
+/// lag-1 autocorrelation of the location's anomaly series, clipped to [0, 1] (0 for fewer than
+/// three periods), unless [`DampedPersistence::damping`] fixes it. As in chap-core, a missing
+/// value anywhere in the history makes the forecast missing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DampedPersistence {
+    /// A fixed `phi` (chap-core's `damping` parameter); `None` estimates it per series.
+    pub damping: Option<f64>,
+}
+
+/// chap-core's `_lag1_autocorrelation`, `NaN` in, `NaN` out.
+fn lag1_autocorrelation(x: &[f64]) -> f64 {
+    if x.len() < 3 {
+        return 0.0;
+    }
+    let mean = x.iter().sum::<f64>() / x.len() as f64;
+    let centred: Vec<f64> = x.iter().map(|v| v - mean).collect();
+    let denominator: f64 = centred.iter().map(|c| c * c).sum();
+    if denominator <= 0.0 {
+        return 0.0;
+    }
+    let numerator: f64 = centred.windows(2).map(|w| w[0] * w[1]).sum();
+    let r = numerator / denominator;
+    if r.is_nan() { r } else { r.clamp(0.0, 1.0) }
+}
+
+impl WeatherProvider for DampedPersistence {
+    fn id(&self) -> &'static str {
+        "damped_persistence"
+    }
+
+    fn future_weather(&self, input: &WeatherInput<'_>) -> Result<Vec<Column>> {
+        let rows = input.locations.len() * input.periods.len();
+        let mut out = Vec::with_capacity(input.covariates.len());
+        for name in input.covariates {
+            let col = input.historic.require(name)?;
+            let mut values = Vec::with_capacity(rows);
+            for (location, idx) in input.locations {
+                let fit = SeasonalFit::new(input, col, name, location, idx)?;
+                let mut ordered: Vec<(Period, f64)> = idx
                     .iter()
-                    .zip(&count)
-                    .filter(|(_, c)| **c > 0)
-                    .map(|(s, c)| s / *c as f64)
+                    .filter_map(|&r| {
+                        let p = *input.historic_periods.get(r)?;
+                        Some((p, col.f64_at(r).unwrap_or(f64::NAN)))
+                    })
                     .collect();
-                if observed.is_empty() {
-                    return Err(Error::invalid(format!(
-                        "cannot fit a climatology for '{name}' in {location}: every value is missing"
-                    )));
-                }
-                let fallback = observed.iter().sum::<f64>() / observed.len() as f64;
-                for p in input.periods {
-                    let s = season(p);
-                    let v = match (sum.get(s), count.get(s)) {
-                        (Some(total), Some(&c)) if c > 0 => total / c as f64,
-                        _ => fallback,
-                    };
-                    values.push(Some(v));
-                }
+                ordered.sort_by_key(|(p, _)| *p);
+                let anomaly: Vec<f64> = ordered.iter().map(|(p, v)| v - fit.at(p)).collect();
+                let phi = self
+                    .damping
+                    .unwrap_or_else(|| lag1_autocorrelation(&anomaly));
+                let last = anomaly.last().copied().unwrap_or(f64::NAN);
+                values.extend(input.periods.iter().enumerate().map(|(h, p)| {
+                    let v = fit.at(p) + phi.powf((h + 1) as f64) * last;
+                    (!v.is_nan()).then_some(v)
+                }));
             }
             out.push(Column::Float(values));
         }
@@ -277,4 +372,22 @@ pub(crate) fn masked_future(
         out.push_column(MASK_INDICATOR, Column::from_f64(vec![0.0; rows]))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lag1_autocorrelation_as_chap_core() {
+        assert_eq!(lag1_autocorrelation(&[1.0, 5.0]), 0.0);
+        assert_eq!(lag1_autocorrelation(&[2.0, 2.0, 2.0]), 0.0);
+        // Centred [-1, 0, 1]: no lag-1 correlation.
+        assert_eq!(lag1_autocorrelation(&[1.0, 2.0, 3.0]), 0.0);
+        // Alternating: negative, clipped to 0.
+        assert_eq!(lag1_autocorrelation(&[1.0, -1.0, 1.0, -1.0]), 0.0);
+        // Centred [-1.5, -0.5, 0.5, 1.5]: (0.75 - 0.25 + 0.75) / 5.
+        assert!((lag1_autocorrelation(&[1.0, 2.0, 3.0, 4.0]) - 0.25).abs() < 1e-15);
+        assert!(lag1_autocorrelation(&[1.0, f64::NAN, 3.0]).is_nan());
+    }
 }

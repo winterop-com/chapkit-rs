@@ -14,6 +14,8 @@ Writes crates/chapkit-eval/fixtures/eval_<case>.json, each with:
   evaluation window, and a covariate never observed in one season for one location (so the
   climatology falls back to its regression);
 - `params`: n_periods, n_splits, stride, n_retrain (and masked ranges, if any);
+- `dropped`: the locations chap-core's REST backtest leaves out (`validate_and_filter_dataset_for_evaluation`:
+  no observed target before the test windows); the `untrained` case has one;
 - `prepared`: the dataset as chap-core's REST API loads it (`DataSet.from_pandas(df,
   fill_missing=True)`): sorted, gaps filled, every location padded to the same range. The
   `messy_*` cases have a gap inside one location, a location starting later and one ending
@@ -48,10 +50,11 @@ from chap_core.database.dataset_tables import MaskedRange, Observation
 from chap_core.database.model_templates_and_config_tables import ConfiguredModelDB, ModelTemplateDB
 from chap_core.datatypes import Samples
 from chap_core.models.builtin import get_builtin_model
+from chap_core.rest_api.db_worker_functions import validate_and_filter_dataset_for_evaluation
 from chap_core.spatio_temporal_data.temporal_dataclass import DataSet
 
 OUT = Path(os.environ.get("FIXTURES_OUT") or Path(__file__).resolve().parent.parent / "crates/chapkit-eval/fixtures")
-PROVIDERS = ["climatology", "observed"]
+PROVIDERS = ["climatology", "damped_persistence", "observed"]
 
 
 def monthly(i: int) -> str:
@@ -209,7 +212,7 @@ def splits(ds: DataSet, params: dict, provider: str) -> dict:
     return {"train_last": train.period_range[-1].id, "splits": out}
 
 
-def metrics_of(ds: DataSet, estimator, params: dict) -> dict:
+def metrics_of(ds: DataSet, estimator, params: dict, stored: DataSet) -> dict:
     model_template = ModelTemplateDB(id="fixture", name="fixture", version="1")
     configured = ConfiguredModelDB(id="fixture", model_template_id="fixture", model_template=model_template)
     evaluation = Evaluation.create(
@@ -230,7 +233,7 @@ def metrics_of(ds: DataSet, estimator, params: dict) -> dict:
     # stored dataset, so the observations are every observed target, not only the test windows.
     observations = [
         Observation(period=p.id, org_unit=loc, value=float(v), feature_name="disease_cases")
-        for loc, d in ds.items()
+        for loc, d in stored.items()
         for p, v in zip(d.time_period, d.disease_cases, strict=True)
         if np.isfinite(v)
     ]
@@ -294,16 +297,22 @@ def run(case: str, df: pd.DataFrame, params: dict, masked: list[dict] | None = N
     ds = DataSet.from_pandas(df, fill_missing=True)
     if masked:
         ds = ds.apply_masked_ranges([MaskedRange(**r) for r in masked])
+    stored = ds
+    # As resolve_backtest_specification: locations without a target before the test windows go.
+    ds = validate_and_filter_dataset_for_evaluation(
+        ds, "disease_cases", params["n_periods"], params["n_splits"], params["stride"]
+    )
     out = {
         "chap_core": "2.7.0",
         "params": params | ({"masked_ranges": masked} if masked else {}),
         "data": wire(df),
-        "prepared": wire(frame(ds)),
+        "prepared": wire(frame(stored)),
+        "dropped": sorted(set(stored.keys()) - set(ds.keys())),
         "splits": {p: splits(ds, params, p) for p in PROVIDERS},
         "models": {
-            "seasonal_median": metrics_of(ds, Builtin("seasonal_median"), params),
-            "covariate": metrics_of(ds, Covariate(), params),
-            "since_last": metrics_of(ds, SinceLast(), params),
+            "seasonal_median": metrics_of(ds, Builtin("seasonal_median"), params, stored),
+            "covariate": metrics_of(ds, Covariate(), params, stored),
+            "since_last": metrics_of(ds, SinceLast(), params, stored),
         },
     }
     path = OUT / f"eval_{case}.json"
@@ -335,6 +344,12 @@ if __name__ == "__main__":
         messy(dataset(monthly, 48, 12, ["A", "B", "C", "D"], seed=4), [monthly(i) for i in range(48)], range(37, 39), 6, 40, 20, seed=4),
         {"n_periods": 3, "n_splits": 4, "stride": 2, "n_retrain": 2},
     )
+    # C has no target before the test windows (observed only inside them), so chap-core drops it;
+    # its observations still set crps_norm's range.
+    untrained = dataset(monthly, 36, 12, ["A", "B", "C"], seed=6)
+    untrained.loc[(untrained.location == "C") & (untrained.index % 36 < 29), "disease_cases"] = float("nan")
+    untrained.loc[(untrained.location == "C") & (untrained.index % 36 == 33), "disease_cases"] = 500.0
+    run("untrained", untrained, {"n_periods": 3, "n_splits": 3, "stride": 2, "n_retrain": 1})
     # A's gap covers 2020W52 to 2021W01, across 2020W53.
     run(
         "messy_weekly",

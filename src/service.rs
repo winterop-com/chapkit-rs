@@ -134,7 +134,7 @@ impl Service {
             "chapkit_version": format!("{CHAPKIT_API_VERSION}+chapkit-rs.{}", env!("CARGO_PKG_VERSION")),
             "chapkit_rs_version": env!("CARGO_PKG_VERSION"),
             "servicekit_version": null,
-            "extensions": ["$predict-sync", "$explain"],
+            "extensions": ["$predict-sync", "$explain", "$backtest", "$hpo"],
         })
     }
 
@@ -242,6 +242,12 @@ impl Service {
                 chapkit_flow::run(&url, &test.flow)
                     .await
                     .map_err(std::io::Error::other)
+            }
+            Command::Hpo(args) => {
+                let report = crate::hpo_cmd::run(self.model.as_ref(), &self.id, &args)
+                    .map_err(std::io::Error::other)?;
+                println!("{report}");
+                Ok(())
             }
             Command::Eval(args) => {
                 let report = crate::eval_cmd::run(self.model.as_ref(), &self.id, &args)

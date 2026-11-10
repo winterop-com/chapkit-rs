@@ -14,9 +14,12 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod analysis;
 pub mod cli;
 mod erased;
 mod eval_cmd;
+mod evaluate;
+mod hpo_cmd;
 mod ml;
 mod routes;
 mod service;
@@ -30,6 +33,7 @@ pub use chapkit_dataframe as dataframe;
 pub use chapkit_dataframe::polars;
 pub use chapkit_eval as eval;
 pub use chapkit_flow as flow;
+pub use chapkit_hpo as hpo;
 pub use chapkit_http as http;
 pub use chapkit_store as store;
 pub use chapkit_xai as xai;

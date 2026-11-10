@@ -15,5 +15,12 @@ schemars.workspace = true
 safetensors.workspace = true
 rayon.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "period"
+harness = false
+
 [lints]
 workspace = true

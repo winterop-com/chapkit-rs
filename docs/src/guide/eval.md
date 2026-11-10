@@ -3,7 +3,7 @@
 `chapkit-eval` is chap-core's evaluation run inside the model binary: the same splits, the same future
 weather and the same metrics, giving the same numbers, but with `train` and `predict` as plain function
 calls. A backtest that takes chap-core most of a minute through the job flow takes milliseconds here, which
-is what a developer iterating on a model, and hyperparameter search, need.
+is what a developer iterating on a model, and hyperparameter search ([Hyperparameter search](hpo.md)), need.
 
 chap-core stays the source of record: this is the developer's preview of its evaluation. The port follows
 chap-core 2.7.0 and is checked against fixtures chap-core generates ([Parity](#parity)).
@@ -44,9 +44,32 @@ Ratio Above Truth         0.2735    0.3252    0.2581    0.2371
 RMSE 134.08000750558756). The options are in the [command reference](../reference/cli.md#eval).
 
 A dataset is a CSV file or chapkit's JSON (`{columns, data}`) with `time_period`, `location`,
-`disease_cases` and the covariates, as chap-core reads them. The model's default configuration is used.
-It is prepared as chap-core prepares it ([Preparation](#preparation)); `--keep-gaps` and `--no-pad` turn
-parts of that off, and the first line of the output says so.
+`disease_cases` and the covariates, as chap-core reads them. Periods may be in any monthly or weekly form
+chap-core reads: `2024-01`, `202401`, `2024-1`, `2024W03`, `2024-W03`, `2024SunW03`, `2024-S03`, and the
+7-day ranges of chap-core's CSV export (`2019-01-07/2019-01-13`). It is prepared as chap-core prepares it
+([Preparation](#what-it-does)); `--keep-gaps`, `--no-pad` and `--keep-untrained` turn parts of that off,
+and the first line of the output says so.
+
+The model's default configuration is used unless `--config` gives options, as JSON or `@file`, flat or
+nested as chap-core sends them (`{"user_option_values": {...}}`). They go through the same checks and
+defaults as `POST /api/v1/configs`; `prediction_periods` is always `--periods`:
+
+```sh
+configurable-baseline eval --data laos.csv --config '{"spread_factor": 1.5}'
+```
+
+`--json` prints the whole result instead of the tables, every number at full precision (each `f64` as
+the shortest text that reads back to it), so it can be compared with chap-core's stored
+`aggregateMetrics` digit for digit: the settings, the config that ran, the dataset (with any dropped
+locations), the splits, and the metrics (`aggregate`, `by_horizon`, `by_location`), keyed by chap-core's
+`metric_id`, `null` where undefined:
+
+```sh
+configurable-baseline eval --data laos.csv --json | jq .aggregate.crps
+```
+
+`$backtest` runs the same backtest as a job of a running service and stores this JSON as an
+`ml_backtest` artifact ([HTTP endpoints](../reference/endpoints.md)).
 
 ## From Rust
 
@@ -86,6 +109,14 @@ gives chap-core's forecasts only with filling on.
 `chapkit::eval::prepare` is the step on its own; a backtest runs it before splitting. Sunday-start weeks
 cannot be filled or padded yet.
 
+**Untrained locations**, as chap-core's REST backtest (`validate_and_filter_dataset_for_evaluation`, after
+preparation and masking): a location with no observed target before the test windows (in the first
+`n - (periods + (splits - 1) * stride)` periods) is left out of the backtest, and when none is left the
+backtest fails with chap-core's error. Its observations still count in the range `crps_norm` divides by,
+as in chap-core's stored aggregate. `eval` names the count on its `data:` line (`1 dropped (no target before
+the test windows)`) and the locations in `--json` (`data.dropped`). `Options::drop_untrained` (on by
+default), `--keep-untrained` to keep them.
+
 **Splits** (chap-core's `train_test_generator`). With `n` periods, the first training uses every period
 up to index `n - (periods + (splits - 1) * stride + 1)`; split `i` has the history up to `stride * i`
 periods later and forecasts the `periods` after it. With `--retrain N` the model is trained `N` times,
@@ -96,9 +127,12 @@ at splits `{(j * splits) / N}`: the first on the training set, the later ones on
 | provider | |
 |---|---|
 | `climatology` (default) | per location and covariate, the mean of each month (or week; week 53 counts as 52) of the history. A season never observed gets the mean of the observed seasons' means, as chap-core's regression gives. `population` and text columns are carried forward from each location's last row. |
+| `damped_persistence` (`--weather damped-persistence`) | the climatology plus the last anomaly from it, damped with the horizon: `climatology(T+h) + phi^h * (y(T) - climatology(T))`, with `phi` the lag-1 autocorrelation of the location's anomaly series, clipped to [0, 1]. The reference forecast chap-core recommends over plain climatology. As in chap-core, a covariate missing anywhere in a location's history gives a missing forecast for it. |
 | `observed` | the covariates as observed in the window. Looks ahead: for diagnostics only, the scores are not comparable to production. |
 
-chap-core's damped persistence and MSTL + ARIMA providers are not ported yet.
+chap-core's MSTL + ARIMA provider is not ported: it forecasts each series with statsforecast's AutoARIMA,
+a stepwise search over ARIMA orders with its own estimation and model selection, and a port that matches it
+number for number is a project of its own.
 
 **Metrics**, with chap-core's definitions: CRPS (the order-statistic estimator), CRPS on `log1p` values,
 CRPS divided by the range of the observations, MAE, RMSE and MAPE of the sample median, coverage of the
@@ -123,8 +157,9 @@ samples, there must be more periods than the windows cover, and `retrain` cannot
 ## Parity
 
 `scripts/gen_eval_fixtures.py` runs chap-core's own `train_test_generator`, `backtest` (with retraining)
-and metrics on five generated datasets (monthly, weekly across ISO week 53, monthly with a masked range,
-and two messy ones), with a missing and a zero target in the evaluation window and a covariate never
+and metrics on six generated datasets (monthly, weekly across ISO week 53, monthly with a masked range,
+two messy ones, and one with a location that has no target before the test windows, which chap-core's own
+filter drops), with a missing and a zero target in the evaluation window and a covariate never
 observed in one season. The messy datasets, monthly and weekly, have a gap inside one location (in the
 weekly one across 2020W53), a location starting late and one ending early, a period missing for every
 location, and their rows shuffled; chap-core loads every dataset with `fill_missing=True`. It writes `crates/chapkit-eval/fixtures/eval_<case>.json`; the data comes from a fixed seed, so a
@@ -140,7 +175,8 @@ The tests in `crates/chapkit-eval/tests/parity.rs` check, for each case:
 |---|---|---|
 | the prepared dataset, row for row | exact | 0 |
 | every split's windows (train end, history end, forecast periods) | exact | - |
-| the future frame from both providers | 1e-9 relative | 1.2e-15 |
+| the locations dropped as untrained | exact | - |
+| the future frame from the climatology, damped persistence and observed providers | 1e-9 relative | below 1e-13 |
 | every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and two test models | 1e-12 relative | 1.4e-15 |
 | whole backtests of the two test models (repeated in Rust; one counts periods since the last observation): forecasts and metrics | 1e-12 relative | 5.0e-16 |
 

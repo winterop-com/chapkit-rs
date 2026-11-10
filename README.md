@@ -27,6 +27,10 @@ the [benchmarks chapter](docs/src/results/benchmarks.md) of the book.
 Through a real chap-core (via chap-devops), the Rust ports of chap-core's baselines score identically to
 chap-core's own built-in baselines, to six decimals.
 
+Every model binary also backtests itself in-process with chap-core's splits, weather and metrics (`eval`, and
+`$backtest` as a job), and searches its hyperparameters with a backtest per trial (`hpo`, `$hpo`), about 2000
+trials per second for a baseline-sized model.
+
 Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-process Rust models.
 
 ## Getting started
@@ -54,6 +58,7 @@ write and serve a model package, testing with chap-core, and the results.
 | `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints, RNG, synthetic data. Pure: no IO. |
 | `chapkit-xai` | LIME and KernelSHAP over forecasts, in-process and parallel. |
 | `chapkit-eval` | chap-core's backtest in-process: splits, future weather, metrics, with chap-core's numbers. Pure: no IO. |
+| `chapkit-hpo` | Hyperparameter search: random and grid over a model's search space, each trial an in-process backtest, in parallel. Pure: no IO. |
 | `chapkit-dataframe` | Columnar `DataFrame` with the chapkit `{columns, data}` wire format. |
 | `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, SSE, metrics, auth, registration, OpenAPI. |
 | `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend, turso backend (feature `turso`). |

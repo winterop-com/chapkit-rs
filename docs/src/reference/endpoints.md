@@ -2,7 +2,7 @@
 
 Generated from `openapi.json`. Every service also serves the full document at `/openapi.json` and
 interactive docs at `/docs`. Routes marked chapkit-rs only are extensions Python chapkit does not have:
-`$predict-sync` and `$explain`.
+`$predict-sync`, `$explain`, `$backtest` and `$hpo`.
 
 | method | path | summary |
 |---|---|---|
@@ -34,8 +34,10 @@ interactive docs at `/docs`. Routes marked chapkit-rs only are extensions Python
 | `GET` | `/api/v1/jobs/{job_id}` | Get a job. |
 | `DELETE` | `/api/v1/jobs/{job_id}` | Cancel (if running) and delete a job. |
 | `GET` | `/api/v1/jobs/{job_id}/$stream` | Stream a job's record as server-sent events until it finishes. Sends |
+| `POST` | `/api/v1/ml/$backtest` | Backtest the model on a dataset in-process, scored as chap-core scores it. Returns 202; the |
 | `POST` | `/api/v1/ml/$explain` | Explain one forecast cell with LIME or KernelSHAP, computed in-process: every |
 | `GET` | `/api/v1/ml/$generate-sample-data` | A ready-to-submit sample `$train` or `$predict` payload from the synthetic data |
+| `POST` | `/api/v1/ml/$hpo` | Search the model's hyperparameters (random or grid over its `hpo_search_space`), each trial |
 | `POST` | `/api/v1/ml/$predict` | Predict with a trained model. Returns 202; the prediction artifact is a child of the training artifact. |
 | `POST` | `/api/v1/ml/$predict-sync` | Predict and return the forecast directly: no job, no stored artifact. The trained |
 | `POST` | `/api/v1/ml/$train` | Train a model. Returns 202 with the job id and the artifact id the model will be stored under. |

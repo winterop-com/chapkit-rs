@@ -30,7 +30,9 @@ Without arguments the binary prints its help. A failing command prints one line,
 `error: no service at http://127.0.0.1:8000` or `error: cannot listen on 127.0.0.1:8000: Address already in use`,
 and exits with code 1. Each option of `serve` falls back to its environment variable
 (`HOST`, `PORT`, `DATABASE_URL`, `CHAPKIT_MAX_CONCURRENCY`), so containers and chap-devops can keep configuring it
-with environment variables; a flag wins over both the variable and the builder.
+with environment variables. The order is flag, then environment variable, then the builder
+(`.database(...)`, `.max_concurrency(...)`), then the default: a value written in the model's code is only a
+default, so the `DATABASE_URL` the Docker image sets always wins.
 
 The binary prints `INFO:     Uvicorn running on http://HOST:PORT`, the line chap-core's MLproject runner
 waits for. All environment variables are listed in the [reference](../reference/environment.md).

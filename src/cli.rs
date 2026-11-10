@@ -45,11 +45,16 @@ pub struct Address {
 pub struct ServeArgs {
     #[command(flatten)]
     pub address: Address,
-    /// Database URL [env: DATABASE_URL]
-    #[arg(long, value_name = "URL")]
+    /// Database URL
+    #[arg(long, value_name = "URL", env = "DATABASE_URL", hide_env_values = true)]
     pub database: Option<String>,
-    /// Jobs at once [env: CHAPKIT_MAX_CONCURRENCY]
-    #[arg(long, value_name = "N")]
+    /// Jobs at once
+    #[arg(
+        long,
+        value_name = "N",
+        env = "CHAPKIT_MAX_CONCURRENCY",
+        hide_env_values = true
+    )]
     pub max_concurrency: Option<usize>,
 }
 

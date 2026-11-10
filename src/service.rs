@@ -74,14 +74,15 @@ impl Service {
     }
 
     /// Database URL (`:memory:`, a path, `sqlite:///path`, or `turso:///path` with the
-    /// `turso` feature). Overrides `DATABASE_URL`.
+    /// `turso` feature). A default: `serve` uses `--database` or `DATABASE_URL` when given.
     #[must_use]
     pub fn database(mut self, url: impl Into<String>) -> Self {
         self.database_url = Some(url.into());
         self
     }
 
-    /// Jobs allowed to run at once.
+    /// Jobs allowed to run at once. A default: `serve` uses `--max-concurrency` or
+    /// `CHAPKIT_MAX_CONCURRENCY` when given.
     #[must_use]
     pub fn max_concurrency(mut self, n: usize) -> Self {
         self.max_concurrency = n.max(1);
@@ -209,8 +210,10 @@ impl Service {
             .about(self.display_name.clone())
     }
 
-    /// Apply `serve`'s `--database` and `--max-concurrency`, when given, over the builder and the
-    /// environment. The order is flag, builder, environment variable, default.
+    /// Apply `serve`'s `--database` and `--max-concurrency` over the builder. Each comes from its
+    /// flag, else its environment variable (`DATABASE_URL`, `CHAPKIT_MAX_CONCURRENCY`), so the
+    /// order is flag, environment variable, builder, default: a deployment's settings win over
+    /// values written in the model's code.
     #[must_use]
     pub fn with_serve_args(mut self, args: &ServeArgs) -> Self {
         if let Some(url) = &args.database {
@@ -222,8 +225,8 @@ impl Service {
         self
     }
 
-    /// Run a [`Command`]: `serve` until shutdown (`--database` and `--max-concurrency` override the
-    /// builder and the environment), `test` the running service, or `healthcheck` it.
+    /// Run a [`Command`]: `serve` until shutdown (`--database` and `--max-concurrency`, or their
+    /// environment variables, override the builder), `test` the running service, or `healthcheck` it.
     pub async fn run(mut self, command: Command) -> std::io::Result<()> {
         match command {
             Command::Healthcheck(address) => chapkit_http::health::probe(&address.url()).await,
@@ -301,7 +304,8 @@ mod tests {
         let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", test, "--nocapture"])
             .env("CHAPKIT_SERVICE_CHILD", "1")
-            .env_remove("CHAPKIT_MAX_CONCURRENCY");
+            .env_remove("CHAPKIT_MAX_CONCURRENCY")
+            .env_remove("DATABASE_URL");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -340,6 +344,46 @@ mod tests {
             .max_concurrency(3)
             .with_serve_args(&args(Some(5)));
         assert_eq!(flagged.max_concurrency, 5);
+    }
+
+    /// `serve`'s settings as the binary parses them: the flag, else the environment variable,
+    /// both over the builder (so `DATABASE_URL` set by Docker wins over `.database(...)`).
+    #[test]
+    fn serve_env_beats_builder_and_flag_beats_env() {
+        if !in_child(
+            "service::tests::serve_env_beats_builder_and_flag_beats_env",
+            &[
+                ("CHAPKIT_MAX_CONCURRENCY", "4"),
+                ("DATABASE_URL", "/env.db"),
+            ],
+        ) {
+            return;
+        }
+        let serve = |argv: &[&str]| match <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
+            .unwrap()
+            .command
+        {
+            Command::Serve(args) => args,
+            other => panic!("not serve: {other:?}"),
+        };
+        let built = || {
+            Service::new("m", "M", Nop)
+                .database("/code.db")
+                .max_concurrency(3)
+        };
+        let from_env = built().with_serve_args(&serve(&["m", "serve"]));
+        assert_eq!(from_env.database_url.as_deref(), Some("/env.db"));
+        assert_eq!(from_env.max_concurrency, 4);
+        let from_flags = built().with_serve_args(&serve(&[
+            "m",
+            "serve",
+            "--database",
+            "/flag.db",
+            "--max-concurrency",
+            "2",
+        ]));
+        assert_eq!(from_flags.database_url.as_deref(), Some("/flag.db"));
+        assert_eq!(from_flags.max_concurrency, 2);
     }
 
     #[test]

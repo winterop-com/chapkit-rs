@@ -1,8 +1,8 @@
 # Environment variables
 
 `HOST`, `PORT`, `DATABASE_URL` and `CHAPKIT_MAX_CONCURRENCY` are also options of a model binary's `serve`
-(`--host`, `--port`, `--database`, `--max-concurrency`); a flag wins over the variable
-([command line](cli.md#a-model-binary)).
+(`--host`, `--port`, `--database`, `--max-concurrency`); a flag wins over the variable, and the
+variable over a value set in the model's code ([command line](cli.md#a-model-binary)).
 
 | variable | default | meaning |
 |---|---|---|

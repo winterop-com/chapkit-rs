@@ -287,7 +287,7 @@ numbers.
 
 Every metric of every model is identical except one: seasonal shift persistence's `ratio_above_truth` is 0.5116505407
 for the port and 0.5116476949 for the built-in. One sample in about 350,000 that equals the observation exactly in
-Python lands one rounding step above it in Rust (finding 9).
+Python lands one rounding step above it in the port (finding 9, fixed in 1.0.3).
 
 **Time, CPU and memory** (evaluation 2, all 11 jobs running at once):
 
@@ -317,7 +317,7 @@ reused), each backtest took 42 s.
 | 6 | Retiring a model (`cdx models remove`) and registering a new build does not change what chap-core already stored: its model templates kept the old display names and status. chap-core does this by design: a template version is write-once, and since the new build reported the same version (1.0.0, the `Service` default) from a new git revision, chap-core logged a revision conflict and refuses to run the model until the version changes. The ports now report their crate version. | chapkit-rs-models | fixed: version 1.0.1 |
 | 7 | chap-core runs its four built-in baselines with every evaluation, so ticking the built-ins as models as well runs them twice. | Modeling App | noted |
 | 8 | A chapkit model backtest took 47 s against 19 s for a built-in, although the service itself answered in under a second in total: the time is chap-core's REST wrapper (9 s before `$train`, about 4 s per split). This is the overhead the in-process fast paths avoid; it is on chap-core's side. | chap-core | open |
-| 9 | Seasonal shift persistence differs from the built-in in the last bit of some samples (at most 3.5e-16), enough to flip one tie with the observation in about 350,000 samples (`ratio_above_truth` off by 2.8e-6). | chapkit-rs-models | open: match Python's operation order |
+| 9 | Seasonal shift persistence differs from the built-in in the last bit of some samples (at most 3.5e-16), enough to flip one tie with the observation in about 350,000 samples (`ratio_above_truth` off by 2.8e-6). The cause was the quantile interpolation shared by every port: numpy computes `b - (b - a) * (1 - t)` for `t >= 0.5`. | chapkit-rs-models | fixed in 1.0.3: bit-identical, and the parity tests compare bitwise |
 | 10 | District "0710 Xon" has no geometry in the demo database, which blocks district datasets (step 8). | DHIS2 demo data | worked around |
 | 11 | Running a prediction needs a **Last training period**, which has no default although the setup knows where its data ends; the picker opens on the current year, two years after the data. | Modeling App | noted |
 | 12 | The deployment was taken down twice mid-run from outside the session running it: once from the Docker Desktop dashboard (a bulk action, which runs `docker compose --project-name <project> down --remove-orphans`), once by another session running `chap-devops down` in the same folder. The deployment folder and its compose project are shared state. Docker Desktop's backend log (`~/Library/Containers/com.docker.docker/Data/log/host/com.docker.backend.log*`) records who did it: the client, the compose command and the project. | local setup | noted |

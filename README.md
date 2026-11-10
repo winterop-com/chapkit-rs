@@ -8,29 +8,42 @@ chap-marketplace work unchanged.
 
 A call to a Python chapkit model costs 2.5-3 s of overhead (job polling, workspace copy, zip, pickle).
 That is fine for one backtest, but not for explainers (LIME/SHAP), hyperparameter search or AutoML,
-which call a model hundreds to thousands of times. In chapkit-rs a model is a Rust trait called
-directly, so a call costs microseconds:
+which call a model hundreds to thousands of times. Measured on the same model (chap-core's
+`global_median`, 20 locations x 120 months):
 
-| model (50 locations x 120 months, predict 3 periods) | predict |
-|---|---|
-| global_median | 55 us |
-| seasonal_median | 79 us |
-| seasonal_shift_persistence | 0.8 ms |
-| ridge (covariates) | 104 us |
+| | Python chapkit | chapkit-rs |
+|---|---|---|
+| train + predict through chap-core's job flow | 4.08 s | 0.013 s |
+| CPU per prediction | 154 ms | 2.3 ms |
+| `$predict-sync` (forecast returned directly) | | 2.7 ms |
+| memory at idle | 150 MB | 16 MB |
+| startup | 0.9 s | 0.02 s |
+| install size | 522 MB (Python environment) | 11.9 MB (binary) |
 
-Measured with `make bench` on an Apple Silicon laptop.
+Most of the chap-core speedup comes from finishing fast jobs before chap-core's first status check, which
+Python chapkit could adopt too; the CPU, memory and in-process numbers are Rust. Details, method and caveats:
+the [benchmarks chapter](docs/src/results/benchmarks.md) of the book.
+
+Through a real chap-core (via chap-devops), the Rust ports of chap-core's baselines score identically to
+chap-core's own built-in baselines, to six decimals.
 
 Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-process Rust models.
+
+## Documentation
+
+The book in `docs/` (`make docs`, `make docs-serve`) explains the approach, every design decision, how to
+write and serve a model package, testing with chap-core, and the results.
 
 ## Layout
 
 | crate | role |
 |---|---|
 | `chapkit` (root) | What model authors depend on. `Service` turns a `Model` into the full chapkit HTTP API. |
-| `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints. Pure: no IO. |
+| `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints, RNG, synthetic data. Pure: no IO. |
+| `chapkit-xai` | LIME and KernelSHAP over forecasts, in-process and parallel. |
 | `chapkit-dataframe` | Columnar `DataFrame` with the chapkit `{columns, data}` wire format. |
-| `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, auth, registration, OpenAPI. |
-| `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend. |
+| `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, SSE, metrics, auth, registration, OpenAPI. |
+| `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend, turso backend (feature `turso`). |
 
 Example models (ports of chap-core's baselines, checked against chap-core number for number, and a
 covariate model for xAI/HPO) live next door in `../chapkit-rs-examples`.
@@ -77,7 +90,12 @@ Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by defaul
 ## Development
 
 ```sh
-make lint      # fmt + clippy, warnings are errors
-make test      # all tests, including the chapkit HTTP contract
-make bench     # criterion benchmarks
+make check            # lint + test; run before every commit
+make test-turso       # store suite and HTTP contract on the turso backend
+make bench            # criterion benchmarks
+make openapi          # regenerate the committed openapi.json
+make compare-openapi PY=<url> RS=<url>   # diff against a running Python chapkit service (base URLs)
+make examples-check   # make check in ../chapkit-rs-examples
+make examples-release # example binaries into ../chapkit-rs-examples/bin
+make docs             # build the book
 ```

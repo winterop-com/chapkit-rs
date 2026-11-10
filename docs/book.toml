@@ -1,0 +1,9 @@
+[book]
+title = "chapkit-rs"
+authors = ["Morten Hansen"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"

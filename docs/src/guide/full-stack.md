@@ -143,7 +143,7 @@ compared with its original through chap-core.
 
 After changing a model, bump its version (the workspace `version` in chapkit-rs-models' `Cargo.toml`; chap-core
 refuses a new build under an old version, finding 6), publish its images (push to `main`; the image workflow builds
-them) and replace the running ones:
+them, once per version) and replace the running ones:
 
 ```sh
 for m in global_median seasonal_median seasonal_shift_persistence; do cdx models remove baseline_$m; done

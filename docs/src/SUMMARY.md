@@ -31,6 +31,7 @@
 - [Serving and configuration](guide/serving.md)
 - [Docker](guide/docker.md)
 - [Testing with chap-core](guide/chap-core.md)
+- [Full stack: chap-core, DHIS2, Modeling App](guide/full-stack.md)
 - [Sample data](guide/sample-data.md)
 
 # Reference

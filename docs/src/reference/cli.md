@@ -5,7 +5,9 @@ cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
 chapkit-rs --help
 ```
 
-From a checkout, `make release` builds it into `bin/chapkit-rs`, and `make install-cli` installs it.
+From a checkout, `make release` builds it into `bin/chapkit-rs`, with `bin/crs` as a short alias, and
+`make install-cli` installs it. Elsewhere, `alias crs=chapkit-rs` gives the same shorthand; the docs use
+`chapkit-rs` in full.
 
 | command | |
 |---|---|

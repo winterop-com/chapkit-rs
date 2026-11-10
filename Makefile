@@ -44,7 +44,7 @@ build:
 
 release:
 	@cargo build --workspace --release
-	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs
+	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs && ln -sf chapkit-rs bin/crs
 	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
 
 lint:

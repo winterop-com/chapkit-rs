@@ -57,26 +57,47 @@ chapkit-rs test
 ```
 
 ```text
-Testing http://127.0.0.1:8000
+chapkit-rs test -> http://127.0.0.1:8000
 
-  ok    health                                            1.5 ms
+Random seed 114429000 (repeat this run with --seed 114429000)
+
+  ok    health                                            0.7 ms
   ok    service info                                      0.3 ms
-  ok    configuration schema                              0.5 ms
-  ok    create a configuration                            0.5 ms
-  ok    generate training data                            0.7 ms
-  ok    generate prediction data                          0.8 ms
-  ok    train (job)                                       2.4 ms
-  ok    predict (job)                                     3.6 ms
-  ok    forecast has the shape chap-core expects          2.9 ms
+  ok    configuration schema                              0.4 ms
+  ok    configuration 1                                   0.4 ms
+  ok    configuration 1: train 1                          2.1 ms
+  ok    configuration 1: train 1: forecast 1              1.8 ms
 
-dengue-recent (chapkit 2.6.0+chapkit-rs.0.1.0): 5 locations, 36 periods.
-
-All steps passed in 0.01 s.
+  configurations   1
+  trainings        1 ok, 0 failed
+  forecasts        1 ok, 0 failed
+  validations      2 ok
+  time             0.01 s
 ```
 
-Every step chap-core takes with a model service passed: the package is a working Chap model.
+Every step chap-core takes with a model service passed: the package is a working Chap model. The test made up
+its own data, shaped by what the service says it needs, built a configuration from the service's schema, had
+each request checked by `$validate` first, and checked the forecast that came back. Try `--configs 2
+--trainings 2 --predictions 2` for more, or `-v` for details; `chapkit-rs test --start-service` builds and starts
+the package itself.
 
-## 5. Make it yours
+## 5. Look at what it stored
+
+```sh
+chapkit-rs test --keep
+chapkit-rs artifact list --url http://127.0.0.1:8000
+```
+
+```text
+ID                               TYPE                  SIZE  CONFIG                      CREATED
+01M72G9819B9GPTPPFX70DRHYW       ml_training         5.0 KB  01M72G9818NRTXHYJ4R6QYD9C7  2026-11-10T10:32:57
+  01M72G981ACQ2R3J023GFA74BH     ml_prediction            -  01M72G9818NRTXHYJ4R6QYD9C7  2026-11-10T10:32:57
+```
+
+The trained model, and the forecast made with it. `chapkit-rs artifact download <ID> --url ...` saves the
+trained model as a safetensors checkpoint, or the forecast as JSON.
+
+## 6. Make it yours
 
 The forecast logic lives in `src/model.rs`. As an exercise, forecast from the same month in earlier years
 instead of the last 12 months. In `src/lib.rs`, `train` gets each location's series with its periods; the season

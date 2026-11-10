@@ -11,6 +11,8 @@ name = "chapkit-rs"
 path = "src/main.rs"
 
 [dependencies]
+chapkit-core.workspace = true
+chapkit-store.workspace = true
 clap.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

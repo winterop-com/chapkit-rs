@@ -66,6 +66,8 @@ impl Names {
 
 /// Where the chapkit dependency comes from, and how Docker then builds the package.
 struct Wiring {
+    /// chapkit-rs from git: the package builds on its own, so GitHub can publish it.
+    from_git: bool,
     dependency: String,
     docker_context: String,
     dockerfile: String,
@@ -76,6 +78,7 @@ fn wiring(dir: &Path, chapkit_path: Option<&Path>) -> Result<Wiring, String> {
     let Some(chapkit) = chapkit_path else {
         // From git: the package alone is the build context.
         return Ok(Wiring {
+            from_git: true,
             dependency: format!("chapkit = {{ git = \"{CHAPKIT_GIT}\" }}"),
             docker_context: ".".into(),
             dockerfile: "Dockerfile".into(),
@@ -110,6 +113,7 @@ fn wiring(dir: &Path, chapkit_path: Option<&Path>) -> Result<Wiring, String> {
         .to_owned();
     // With chapkit-rs next to the package, the parent directory is the build context.
     Ok(Wiring {
+        from_git: false,
         dependency: format!("chapkit = {{ path = \"{}\" }}", dependency_path.display()),
         docker_context: "..".into(),
         dockerfile: format!("{dir_name}/Dockerfile"),
@@ -144,6 +148,19 @@ pub fn run(
         let text = render(template, &names, &wiring);
         std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
     }
+    // GitHub can only build a package that gets chapkit-rs from git.
+    if wiring.from_git {
+        let target = dir.join(".github/workflows/publish.yml");
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let text = render(
+            include_str!("../templates/publish.yml.tmpl"),
+            &names,
+            &wiring,
+        );
+        std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
+    }
     println!("Created {} in {}", names.title, dir.display());
     println!();
     println!("  cd {}", dir.display());
@@ -152,6 +169,11 @@ pub fn run(
     println!("  chapkit-rs test             # in another terminal: chap-core's flow against it");
     println!();
     println!("The calculation to replace with your model is in src/model.rs.");
+    if !wiring.from_git {
+        println!(
+            "No publishing workflow: GitHub cannot build against a local chapkit-rs checkout."
+        );
+    }
     Ok(())
 }
 
@@ -228,6 +250,9 @@ mod tests {
         let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap_or_default();
         assert!(lib.contains("pub struct MyModel;"));
         assert!(!lib.contains("{{"), "unfilled placeholder");
+        let publish =
+            std::fs::read_to_string(dir.join(".github/workflows/publish.yml")).unwrap_or_default();
+        assert!(publish.contains("BIN=my-model"));
         assert!(run("my-model", Some(dir), None, None).is_err());
     }
 }

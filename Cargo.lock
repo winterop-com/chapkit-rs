@@ -608,6 +608,8 @@ dependencies = [
 name = "chapkit-cli"
 version = "0.1.0"
 dependencies = [
+ "chapkit-core",
+ "chapkit-store",
  "clap",
  "reqwest",
  "serde_json",

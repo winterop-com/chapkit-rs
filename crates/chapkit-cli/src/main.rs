@@ -1,6 +1,7 @@
-//! `chapkit-rs`: scaffold a Rust model package (`init`) and run chap-core's flow against a running
-//! service (`test`).
+//! `chapkit-rs`: scaffold a Rust model package (`init`), test a running service (`test`), and
+//! inspect what a service stored (`artifact`).
 
+mod artifact;
 mod flow;
 mod init;
 
@@ -21,7 +22,8 @@ enum Command {
     /// Create a model package
     ///
     /// The calculation goes in src/model.rs, the chapkit plumbing in src/lib.rs and the service in
-    /// src/main.rs; a test, a Dockerfile and a compose file come with it.
+    /// src/main.rs; a test, a Dockerfile, a compose file and a GitHub workflow that publishes the
+    /// image come with it.
     Init {
         /// Package and service id, e.g. my-model
         name: String,
@@ -37,25 +39,13 @@ enum Command {
     },
     /// Test a running service
     ///
-    /// Runs chap-core's flow against it: health, info, configuration, sample data, training and
-    /// forecasting jobs, and the shape of the stored forecast.
-    Test {
-        /// Service URL
-        #[arg(long, default_value = "http://127.0.0.1:8000")]
-        url: String,
-        /// Locations in the test data
-        #[arg(long, default_value_t = 5)]
-        locations: usize,
-        /// Training periods
-        #[arg(long, default_value_t = 36)]
-        periods: usize,
-        /// Seconds to wait per job
-        #[arg(long, default_value_t = 300)]
-        timeout: u64,
-        /// Keep what the test creates
-        #[arg(long)]
-        keep: bool,
-    },
+    /// Runs chap-core's flow against it with generated data shaped by what the service declares:
+    /// configurations from its schema, $validate, training and forecasting jobs, and the shape of
+    /// every stored forecast. Works against Python chapkit services too.
+    Test(flow::Options),
+    /// Inspect stored artifacts
+    #[command(subcommand)]
+    Artifact(artifact::Command),
 }
 
 #[tokio::main]
@@ -67,22 +57,8 @@ async fn main() -> ExitCode {
             chapkit_path,
             title,
         } => init::run(&name, dir, chapkit_path.as_deref(), title),
-        Command::Test {
-            url,
-            locations,
-            periods,
-            timeout,
-            keep,
-        } => {
-            flow::run(flow::Options {
-                url,
-                locations,
-                periods,
-                timeout,
-                keep,
-            })
-            .await
-        }
+        Command::Test(options) => flow::run(options).await,
+        Command::Artifact(command) => artifact::run(command).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

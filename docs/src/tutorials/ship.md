@@ -31,10 +31,11 @@ passes exactly as against `cargo run`: the container serves on port 8000.
 
 ## 3. Publish it
 
-Push the package to a GitHub repository and build the image in GitHub Actions, as
-[chapkit-rs-models](https://github.com/winterop-com/chapkit-rs-models/blob/main/.github/workflows/docker.yml)
-does: it builds natively for amd64 and arm64 and publishes to the GitHub container registry. A new package there
-starts out private; make it public in the package settings so chap-core deployments can pull it.
+`init` also wrote `.github/workflows/publish.yml`. Push the package to a GitHub repository, and on every push to
+`main` it builds the image natively for amd64 and arm64, publishes it to the GitHub container registry as
+`ghcr.io/<owner>/<repository>:latest` (and `1.2.3` for a `v1.2.3` tag), and attests where it was built. Nothing to
+configure: the built-in `GITHUB_TOKEN` is enough. A new package on the registry starts out private; make it public
+in its settings so chap-core deployments can pull it.
 
 ## 4. Clean up
 

@@ -192,6 +192,17 @@ impl Scheduler {
                     }
                 }
             });
+            if let Some(r) = this.get(id) {
+                let status = serde_json::to_value(r.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                crate::metrics::inc(
+                    "jobs_finished_total",
+                    "Jobs that reached a terminal state.",
+                    &[("status", &status)],
+                );
+            }
             done.notify_waiters();
         });
         if let Some(e) = self.lock().jobs.get_mut(&id) {
@@ -307,6 +318,42 @@ async fn delete_job(
     }
 }
 
+/// Stream a job's record as server-sent events until it finishes. Sends
+/// `{"status": "deleted"}` and stops if the job is deleted.
+#[utoipa::path(get, path = "/{job_id}/$stream", tag = "Jobs", params(("job_id" = String, Path), crate::sse::PollParams),
+    responses((status = OK, content_type = "text/event-stream", body = String), (status = NOT_FOUND, body = Problem)))]
+async fn stream_job(
+    State(s): State<Scheduler>,
+    Path(job_id): Path<String>,
+    Query(p): Query<crate::sse::PollParams>,
+) -> ApiResult<axum::response::Response> {
+    let id = Ulid::from_string(&job_id)
+        .map_err(|_| Problem::bad_request(format!("Invalid job ID format: {job_id}")))?;
+    let interval = p.interval(0.5)?;
+    if s.get(id).is_none() {
+        return Err(Problem::not_found(format!(
+            "Job with id {job_id} not found"
+        )));
+    }
+    let stream = futures_util::stream::unfold(Some((s, id, true)), move |state| async move {
+        let (s, id, first) = state?;
+        if !first {
+            tokio::time::sleep(interval).await;
+        }
+        match s.get(id) {
+            None => Some((
+                Ok(crate::sse::event(&serde_json::json!({"status": "deleted"}))),
+                None,
+            )),
+            Some(r) => {
+                let next = (!r.status.is_terminal()).then_some((s, id, false));
+                Some((Ok(crate::sse::event(&r)), next))
+            }
+        }
+    });
+    Ok(crate::sse::response(stream))
+}
+
 /// JSON schema of the job list.
 #[utoipa::path(get, path = "/$schema", tag = "Jobs", responses((status = OK, body = Object)))]
 async fn job_schema() -> Json<serde_json::Value> {
@@ -340,6 +387,7 @@ pub fn router(scheduler: Scheduler) -> OpenApiRouter {
         .routes(routes!(list_jobs))
         .routes(routes!(job_schema))
         .routes(routes!(get_job, delete_job))
+        .routes(routes!(stream_job))
         .with_state(scheduler)
 }
 

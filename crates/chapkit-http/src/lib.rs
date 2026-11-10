@@ -8,9 +8,11 @@ mod app;
 pub mod extract;
 pub mod health;
 pub mod jobs;
+pub mod metrics;
 pub mod middleware;
 pub mod problem;
 pub mod registration;
+pub mod sse;
 mod system;
 pub mod time;
 

@@ -13,6 +13,15 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+turso = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[features]
+default = []
+# Store backend on turso, a Rust reimplementation of SQLite (same file format).
+turso = ["dep:turso"]
 
 [lints]
 workspace = true

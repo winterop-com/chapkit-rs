@@ -1,4 +1,6 @@
-.PHONY: help check build release lint fmt test bench doc openapi compare-openapi clean
+.PHONY: help check test-turso build release lint fmt test bench doc docs docs-serve openapi compare-openapi examples-check examples-release clean
+
+EXAMPLES ?= ../chapkit-rs-examples
 
 
 help:
@@ -6,18 +8,27 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  check     lint + test; run before every commit"
+	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
 	@echo "  build     Build the workspace, examples and benches (debug)"
 	@echo "  release   Build the workspace in release mode"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
 	@echo "  test      Run all tests"
 	@echo "  bench     Run criterion benchmarks (BENCH=<filter> to narrow)"
-	@echo "  doc       Build API docs"
+	@echo "  doc       Build API docs (rustdoc)"
+	@echo "  docs      Build the mdBook (docs/book)"
+	@echo "  docs-serve  Serve the mdBook with live reload"
 	@echo "  openapi   Regenerate the committed openapi.json"
 	@echo "  compare-openapi PY=<url> RS=<url>  Diff a Python chapkit service's OpenAPI against a chapkit-rs one"
+	@echo "  examples-check    Run make check in $(EXAMPLES)"
+	@echo "  examples-release  Build the example binaries into $(EXAMPLES)/bin"
 	@echo "  clean     Remove build output"
 
 check: lint test
+
+test-turso:
+	@cargo test -p chapkit-store --features turso
+	@CHAPKIT_TEST_DATABASE_URL=turso::memory: cargo test --features turso --test contract
 
 build:
 	@cargo build --workspace --all-targets
@@ -43,12 +54,25 @@ bench:
 doc:
 	@cargo doc --workspace --no-deps
 
+docs:
+	@mdbook build docs
+
+docs-serve:
+	@mdbook serve docs --open
+
 openapi:
 	@UPDATE_OPENAPI=1 cargo test -q --test openapi
 	@echo "wrote openapi.json"
 
 compare-openapi:
+	@if [ -z "$(PY)" ] || [ -z "$(RS)" ]; then echo "usage: make compare-openapi PY=<python chapkit url> RS=<chapkit-rs url>"; exit 2; fi
 	@python3 scripts/compare_openapi.py $(PY) $(RS)
+
+examples-check:
+	@$(MAKE) -C $(EXAMPLES) check
+
+examples-release:
+	@$(MAKE) -C $(EXAMPLES) release
 
 clean:
 	@cargo clean

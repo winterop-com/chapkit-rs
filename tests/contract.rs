@@ -78,10 +78,12 @@ impl Model for MeanModel {
     }
 }
 
-fn app() -> Router {
+async fn app() -> Router {
     chapkit::Service::new("mean", "Mean", MeanModel)
-        .database(":memory:")
+        // CHAPKIT_TEST_DATABASE_URL picks the backend (`make test-turso` runs this on turso).
+        .database(std::env::var("CHAPKIT_TEST_DATABASE_URL").unwrap_or_else(|_| ":memory:".into()))
         .app()
+        .await
         .unwrap()
         .build()
         .0
@@ -136,7 +138,7 @@ fn fixture() -> Value {
 
 #[tokio::test]
 async fn chap_core_flow() {
-    let app = app();
+    let app = app().await;
     let fx = fixture();
 
     let (s, health, _) = call(&app, "GET", "/health", None).await;
@@ -328,6 +330,60 @@ async fn chap_core_flow() {
             .starts_with("2.6.0+chapkit-rs.")
     );
 
+    // A finished job's stream sends its record once and ends.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/jobs/{job_id}/$stream?poll_interval=0.01"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    assert_eq!(res.headers()["x-accel-buffering"], "no");
+    let text =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(
+        text.starts_with("data: {") && text.contains("\"completed\"") && text.ends_with("\n\n"),
+        "{text}"
+    );
+    let (s, _, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/jobs/{job_id}/$stream?poll_interval=0"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain; version=0.0.4")
+    );
+    let text =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(text.contains("ml_train_jobs_total"), "{text}");
+    assert!(
+        text.contains(
+            "http_server_requests_total{method=\"POST\",route=\"/api/v1/ml/$train\",status=\"202\"}"
+        ),
+        "{text}"
+    );
+
     let (_, tree, _) = call(
         &app,
         "GET",
@@ -362,7 +418,7 @@ async fn chap_core_flow() {
 
 #[tokio::test]
 async fn failed_jobs_and_problem_responses() {
-    let app = app();
+    let app = app().await;
     let fx = fixture();
 
     let missing = ulid::Ulid::generate().to_string();

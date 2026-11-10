@@ -11,12 +11,16 @@
 //! - links from a config to the root artifacts trained with it
 
 mod sqlite;
+#[cfg(feature = "turso")]
+mod turso;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use sqlite::SqliteStore;
+#[cfg(feature = "turso")]
+pub use turso::TursoStore;
 
 /// Store errors. Driver details are kept for logs, never sent to clients.
 #[derive(Debug, thiserror::Error)]
@@ -130,9 +134,41 @@ pub trait Store: Send + Sync + 'static {
     async fn config_for_artifact(&self, artifact_id: &str) -> StoreResult<Option<ConfigRow>>;
 }
 
-/// Open a store from a database URL. Accepts `:memory:`, a file path, `sqlite:///path`,
-/// `sqlite://path` and chapkit's `sqlite+aiosqlite:///path`. `None` or empty means in-memory.
-pub fn open(url: Option<&str>) -> StoreResult<SqliteStore> {
+/// Open a store from a database URL.
+///
+/// - SQLite (rusqlite): `:memory:`, a file path, `sqlite:///path`, `sqlite://path`, chapkit's
+///   `sqlite+aiosqlite:///path`. `None` or empty means in-memory SQLite.
+/// - turso (feature `turso`): `turso::memory:`, `turso:///path`, `turso://path`.
+///
+/// As in SQLAlchemy (and so Python chapkit), `sqlite:///data/x.db` is relative to the working
+/// directory and an absolute path takes four slashes: `sqlite:////var/lib/x.db`.
+pub async fn open(url: Option<&str>) -> StoreResult<std::sync::Arc<dyn Store>> {
+    let url = url.map(str::trim).filter(|u| !u.is_empty());
+    if let Some(rest) = url.and_then(|u| u.strip_prefix("turso:")) {
+        let path = rest
+            .strip_prefix("///")
+            .or_else(|| rest.strip_prefix("//"))
+            .unwrap_or(rest);
+        return open_turso(if path.is_empty() { ":memory:" } else { path }).await;
+    }
+    Ok(std::sync::Arc::new(open_sqlite(url)?))
+}
+
+#[cfg(feature = "turso")]
+async fn open_turso(path: &str) -> StoreResult<std::sync::Arc<dyn Store>> {
+    Ok(std::sync::Arc::new(TursoStore::open(path).await?))
+}
+
+#[cfg(not(feature = "turso"))]
+#[allow(clippy::unused_async)]
+async fn open_turso(_: &str) -> StoreResult<std::sync::Arc<dyn Store>> {
+    Err(StoreError::Invalid(
+        "turso: URLs need chapkit-store built with the `turso` feature".into(),
+    ))
+}
+
+/// Open a SQLite store from a database URL (see [`open`]).
+pub fn open_sqlite(url: Option<&str>) -> StoreResult<SqliteStore> {
     match url.map(str::trim).filter(|u| !u.is_empty()) {
         None | Some(":memory:") => SqliteStore::in_memory(),
         Some(u) => {

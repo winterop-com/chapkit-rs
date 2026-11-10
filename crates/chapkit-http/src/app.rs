@@ -89,6 +89,7 @@ impl App {
         let (router, mut doc) = self
             .api
             .merge(health::router(self.checks))
+            .merge(crate::metrics::router())
             .merge(system::router(self.info.clone()))
             .split_for_parts();
         doc.info = InfoBuilder::new()

@@ -33,6 +33,11 @@ tokio.workspace = true
 tower.workspace = true
 ulid.workspace = true
 
+[features]
+default = []
+# turso storage backend (DATABASE_URL=turso:///path).
+turso = ["chapkit-store/turso"]
+
 [lints]
 workspace = true
 
@@ -74,6 +79,8 @@ lru = "0.16"
 rayon = "1"
 chapkit-xai = { path = "crates/chapkit-xai" }
 async-trait = "0.1"
+futures-util = "0.3"
+turso = { version = "0.8.3", default-features = false }
 gethostname = "1"
 chapkit-http = { path = "crates/chapkit-http" }
 chapkit-store = { path = "crates/chapkit-store" }

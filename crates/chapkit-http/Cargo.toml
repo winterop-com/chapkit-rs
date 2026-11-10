@@ -23,6 +23,7 @@ chrono.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 gethostname.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true

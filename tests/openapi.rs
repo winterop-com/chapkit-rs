@@ -23,11 +23,12 @@ impl Model for Noop {
     }
 }
 
-#[test]
-fn committed_openapi_matches_generated() {
+#[tokio::test]
+async fn committed_openapi_matches_generated() {
     let (_, doc, ..) = chapkit::Service::new("chapkit-rs", "chapkit-rs", Noop)
         .database(":memory:")
         .app()
+        .await
         .unwrap()
         .build();
     let mut generated = serde_json::to_string_pretty(&doc).unwrap();

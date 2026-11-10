@@ -15,12 +15,24 @@ use crate::problem::Problem;
 pub async fn request_id(req: Request, next: Next) -> Response {
     let id = ulid::Ulid::generate().to_string();
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| "unmatched".to_owned(), |m| m.as_str().to_owned());
     let start = Instant::now();
     let mut res = next.run(req).await;
     tracing::info!(
         request_id = %id, %method, %path, status_code = res.status().as_u16(),
         duration_ms = start.elapsed().as_secs_f64() * 1000.0, "http.request.complete"
     );
+    if route != "/metrics" {
+        crate::metrics::observe_http(
+            method.as_str(),
+            &route,
+            res.status().as_u16(),
+            start.elapsed().as_secs_f64(),
+        );
+    }
     if let Ok(v) = HeaderValue::from_str(&id) {
         res.headers_mut().insert("x-request-id", v);
     }

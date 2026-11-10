@@ -38,6 +38,7 @@ async fn train(
     Json(req): Json<TrainRequest>,
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
     let config_id = ulid_field("config_id", &req.config_id)?;
+    chapkit_http::metrics::inc("ml_train_jobs_total", "Training jobs submitted.", &[]);
     let artifact_id = ulid::Ulid::generate().to_string();
     let work = Box::pin(ml::train(
         s.clone(),
@@ -66,6 +67,7 @@ async fn predict(
     Json(req): Json<PredictRequest>,
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
     let artifact_id = ulid_field("artifact_id", &req.artifact_id)?;
+    chapkit_http::metrics::inc("ml_predict_jobs_total", "Prediction jobs submitted.", &[]);
     let prediction_id = ulid::Ulid::generate().to_string();
     let work = Box::pin(ml::predict(
         s.clone(),

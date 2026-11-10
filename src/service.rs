@@ -69,7 +69,8 @@ impl Service {
         self
     }
 
-    /// Database URL (`:memory:`, a path, `sqlite:///path`). Overrides `DATABASE_URL`.
+    /// Database URL (`:memory:`, a path, `sqlite:///path`, or `turso:///path` with the
+    /// `turso` feature). Overrides `DATABASE_URL`.
     #[must_use]
     pub fn database(mut self, url: impl Into<String>) -> Self {
         self.database_url = Some(url.into());
@@ -127,8 +128,8 @@ impl Service {
 
     /// Build the app (routers, state, store). Use [`App::serve`] to run it, or
     /// [`App::build`] for an in-process router (tests, benchmarks).
-    pub fn app(self) -> Result<App, StoreError> {
-        let store: Arc<dyn Store> = Arc::new(chapkit_store::open(self.database_url.as_deref())?);
+    pub async fn app(self) -> Result<App, StoreError> {
+        let store: Arc<dyn Store> = chapkit_store::open(self.database_url.as_deref()).await?;
         let info = self.info();
         let jobs = Scheduler::new(self.max_concurrency);
         let state = AppState::new(
@@ -168,6 +169,10 @@ impl Service {
 
     /// Build and serve on `HOST:PORT` until shutdown.
     pub async fn serve(self) -> std::io::Result<()> {
-        self.app().map_err(std::io::Error::other)?.serve().await
+        self.app()
+            .await
+            .map_err(std::io::Error::other)?
+            .serve()
+            .await
     }
 }

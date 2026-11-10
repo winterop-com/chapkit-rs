@@ -1012,6 +1012,58 @@
         }
       }
     },
+    "/api/v1/jobs/{job_id}/$stream": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Stream a job's record as server-sent events until it finishes. Sends\n`{\"status\": \"deleted\"}` and stops if the job is deleted.",
+        "operationId": "stream_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "poll_interval",
+            "in": "query",
+            "description": "Seconds between events.",
+            "required": false,
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ml/$explain": {
       "post": {
         "tags": [
@@ -1450,6 +1502,61 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/$stream": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Stream the health status as server-sent events, forever.",
+        "operationId": "stream_health",
+        "parameters": [
+          {
+            "name": "poll_interval",
+            "in": "query",
+            "description": "Seconds between events.",
+            "required": false,
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Prometheus metrics.",
+        "operationId": "handler",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain; version=0.0.4; charset=utf-8": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

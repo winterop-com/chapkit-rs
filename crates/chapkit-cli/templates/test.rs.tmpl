@@ -1,0 +1,29 @@
+#![allow(clippy::unwrap_used)]
+//! Train and forecast on generated data, and check the trained model survives a checkpoint.
+
+use chapkit::synth::{Generator, Spec};
+use chapkit::{Model, PredictInput, RunInfo, TrainInput};
+use {{crate_name}}::{Config, {{type_name}}};
+
+#[test]
+fn trains_and_forecasts_every_future_row() {
+    // 3 locations, 36 months of training data, then the same history and 3 months to forecast.
+    let train_spec = Spec { num_locations: 3, num_periods: 36, ..Spec::default() };
+    let data = Generator::new(Some(1)).training_data(&train_spec).unwrap();
+    let future_spec = Spec { num_locations: 3, num_periods: 3, ..Spec::default() };
+    let (historic, future) = Generator::new(Some(1)).prediction_data(&future_spec, 36).unwrap();
+    let run = RunInfo::with_periods(3);
+    let config = Config::default();
+    let trained = {{type_name}}.train(&config, TrainInput::new(&data, &run, None)).unwrap();
+    let forecast = {{type_name}}
+        .predict(&trained, &config, PredictInput::new(&historic, &future, &run, None))
+        .unwrap();
+    assert_eq!(forecast.n_rows(), future.n_rows());
+    assert!(forecast.has("sample_99"));
+
+    let checkpoint = chapkit::testing::checkpoint_round_trip(
+        &{{type_name}}, &config, &data, &historic, &future, &run,
+    )
+    .unwrap();
+    assert!(checkpoint.tensors.is_empty());
+}

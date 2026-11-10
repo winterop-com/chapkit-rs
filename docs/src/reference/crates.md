@@ -8,3 +8,4 @@
 | `chapkit-http` | axum, utoipa, tokio, reqwest | `App`, `Problem`, `Scheduler`, jobs router, health, system, info, SSE, metrics, API keys, request ids, registration, extractors, pagination |
 | `chapkit-store` | rusqlite, turso (optional) | `Store` trait, `SqliteStore`, `TursoStore` (feature `turso`), rows, `open(url)` |
 | `chapkit` | all of the above | `Service`, the configs, artifacts and ML routers, the type-erased model, the warm cache; re-exports the crates as `chapkit::{dataframe, http, store, xai}` and `chapkit-core` at the top level |
+| `chapkit-cli` | clap, reqwest | the `chapkit-rs` command: `init` scaffolds a model package, `test` runs chap-core's flow against a running service |

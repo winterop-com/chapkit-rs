@@ -2,6 +2,12 @@
 
 [Introduction](introduction.md)
 
+# Tutorials
+
+- [Install the tools](tutorials/install.md)
+- [Your first model package](tutorials/first-model.md)
+- [Ship it as a container](tutorials/ship.md)
+
 # The approach
 
 - [Why chapkit-rs](approach/why.md)
@@ -29,6 +35,7 @@
 
 # Reference
 
+- [Command line: chapkit-rs](reference/cli.md)
 - [HTTP endpoints](reference/endpoints.md)
 - [Environment variables](reference/environment.md)
 - [Crates](reference/crates.md)

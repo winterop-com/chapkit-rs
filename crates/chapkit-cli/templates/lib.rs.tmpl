@@ -1,0 +1,81 @@
+//! {{title}} as a chapkit [`Model`]. **The calculation is in [`model`]** (`src/model.rs`); this file
+//! connects it to chapkit: configuration, splitting the data per location, the prediction table.
+
+pub mod model;
+
+use std::collections::BTreeMap;
+
+use chapkit::locations::{predict_by_location, series_by_location};
+use chapkit::{
+    DataFrame, Error, Model, ModelInfo, ModelMetadata, PredictInput, Result, TrainInput,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// The model's options. chap-core shows them to users when configuring the model; unknown keys
+/// (chapkit's own, such as `prediction_periods`) are accepted.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Config {
+    /// How many of the most recent observations to forecast from.
+    #[serde(default = "default_recent")]
+    pub recent: usize,
+}
+
+fn default_recent() -> usize {
+    12
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            recent: default_recent(),
+        }
+    }
+}
+
+/// The model.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct {{type_name}};
+
+impl Model for {{type_name}} {
+    type Config = Config;
+    /// The forecast samples of each location, worked out in training.
+    type Trained = BTreeMap<String, Vec<f64>>;
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo {
+            model_metadata: ModelMetadata {
+                author_note: Some("{{title}}".into()),
+                ..ModelMetadata::default()
+            },
+            ..ModelInfo::default()
+        }
+    }
+
+    fn train(&self, config: &Config, input: TrainInput<'_>) -> Result<Self::Trained> {
+        // One time-ordered series per location; each location's samples from its recent values.
+        let series = series_by_location(input.data, &self.info().target)?;
+        Ok(series
+            .into_iter()
+            .filter_map(|(location, s)| {
+                let samples = model::samples(&model::recent_values(&s.values, config.recent))?;
+                Some((location, samples))
+            })
+            .collect())
+    }
+
+    fn predict(
+        &self,
+        trained: &Self::Trained,
+        _: &Config,
+        input: PredictInput<'_>,
+    ) -> Result<DataFrame> {
+        // Every future period of a location gets the location's samples.
+        predict_by_location(input.future, model::N_SAMPLES, |location, rows| {
+            let samples = trained.get(location).ok_or_else(|| {
+                Error::invalid(format!("no observed cases for location '{location}' in training"))
+            })?;
+            Ok(vec![samples.clone(); rows.len()])
+        })
+    }
+}

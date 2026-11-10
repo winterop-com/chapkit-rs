@@ -1,0 +1,63 @@
+//! # {{title}}: how the forecast is calculated
+//!
+//! This file is the model's calculation, kept apart from the chapkit plumbing in `lib.rs` so that
+//! someone who only wants to know how a forecast is made can read it alone. Describe the method in
+//! words here, then write it as plain functions over numbers. Replace the example below with your
+//! model.
+//!
+//! **Example method: recent level.** For each location, take its last `recent` observed
+//! `disease_cases` in the training data (12 by default, one year of months) and forecast every
+//! future period with 100 samples spread over those values (their quantiles). The median of the
+//! forecast is the median of the recent values; the spread is how much they varied.
+
+/// Samples per forecast row, as Chap expects.
+pub const N_SAMPLES: usize = 100;
+
+/// The values to forecast from: the location's last `recent` observed (non-missing) cases,
+/// oldest first.
+pub fn recent_values(cases: &[f64], recent: usize) -> Vec<f64> {
+    let observed: Vec<f64> = cases.iter().copied().filter(|c| c.is_finite()).collect();
+    let start = observed.len().saturating_sub(recent);
+    observed.get(start..).unwrap_or_default().to_vec()
+}
+
+/// `N_SAMPLES` forecast samples spread over `values`: their quantiles at evenly spaced levels
+/// (i + 0.5) / N_SAMPLES, with linear interpolation between sorted values. `None` without values.
+pub fn samples(values: &[f64]) -> Option<Vec<f64>> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable_by(f64::total_cmp);
+    let last = (sorted.len() - 1) as f64;
+    let at = |i: usize| sorted.get(i).copied().unwrap_or(f64::NAN);
+    Some(
+        (0..N_SAMPLES)
+            .map(|i| {
+                let position = (i as f64 + 0.5) / N_SAMPLES as f64 * last;
+                let (below, above) = (position.floor() as usize, position.ceil() as usize);
+                at(below) + (at(above) - at(below)) * (position - below as f64)
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_values_skip_missing_and_keep_the_last() {
+        let cases = [1.0, f64::NAN, 3.0, 4.0, 5.0];
+        assert_eq!(recent_values(&cases, 2), [4.0, 5.0]);
+        assert_eq!(recent_values(&cases, 10), [1.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn samples_span_the_values() {
+        let s = samples(&[10.0, 20.0]).unwrap_or_default();
+        assert_eq!(s.len(), N_SAMPLES);
+        assert!(s.iter().all(|v| (10.0..=20.0).contains(v)));
+        assert_eq!(samples(&[]), None);
+    }
+}

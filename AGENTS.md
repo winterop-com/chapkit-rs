@@ -20,6 +20,10 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - `crates/chapkit-http`: HTTP plumbing with no model knowledge: problem+json errors, job scheduler,
   health, system, info, API keys, request ids, orchestrator registration, OpenAPI.
 - `crates/chapkit-store`: async `Store` trait and its SQLite backend (rusqlite); no HTTP.
+- `crates/chapkit-cli`: the `chapkit-rs` command: `init` (scaffold a model package from `templates/`) and `test`
+  (chap-core's flow against a running service). `init` copies `docker/Dockerfile`, so keep the templates working
+  with it; CI scaffolds a package and runs it on every push.
+- `docker/`: the shared Dockerfile for every model package (see the book's Docker guide).
 - root package `chapkit`: the crate users depend on. `Service` turns a `Model` into the full
   chapkit-compatible API; re-exports the crates above.
 - `tests/contract.rs`: the chapkit HTTP contract end to end, with a tiny model defined in the test.

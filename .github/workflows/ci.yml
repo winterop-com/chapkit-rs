@@ -33,6 +33,28 @@ jobs:
       - name: Lint and test the polars conversion
         run: make test-polars
 
+  scaffold:
+    name: chapkit-rs init builds and passes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the command
+        run: cargo build --release -p chapkit-cli
+      - name: Create a package against this checkout
+        run: target/release/chapkit-rs init ci-model --dir "$RUNNER_TEMP/ci-model" --chapkit-path .
+      - name: Test the package
+        working-directory: ${{ runner.temp }}/ci-model
+        run: cargo test
+      - name: Serve it and run chap-core's flow against it
+        working-directory: ${{ runner.temp }}/ci-model
+        run: |
+          cargo build --release
+          PORT=8000 target/release/ci-model &
+          for _ in $(seq 1 50); do curl -sf localhost:8000/health && break; sleep 0.2; done
+          "$GITHUB_WORKSPACE/target/release/chapkit-rs" test
+
   docs:
     name: Build the book
     runs-on: ubuntu-24.04

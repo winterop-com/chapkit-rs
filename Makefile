@@ -1,4 +1,4 @@
-.PHONY: help check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
+.PHONY: help install-cli check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
 
@@ -7,6 +7,7 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
+	@echo "  install-cli  Install the chapkit-rs command (init, test) into ~/.cargo/bin"
 	@echo "  check     lint + test; run before every commit"
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
 	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
@@ -24,6 +25,9 @@ help:
 	@echo "  models-check    Run make check in $(MODELS)"
 	@echo "  models-release  Build the model binaries into $(MODELS)/bin"
 	@echo "  clean     Remove build output"
+
+install-cli:
+	@cargo install --path crates/chapkit-cli
 
 check: lint test
 

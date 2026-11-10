@@ -1,0 +1,33 @@
+# {{title}} as a container, built with chapkit-rs's Dockerfile (copied into this package).
+#
+#     docker compose up --build
+#
+# Runs as uid 1000 on a read-only filesystem, keeps its database in a volume and reports its health.
+# Set SERVICEKIT_ORCHESTRATOR_URL to register with chap-core.
+
+services:
+  {{name}}:
+    build:
+      context: {{docker_context}}
+      dockerfile: {{dockerfile}}
+      args:
+        WORKSPACE: {{docker_workspace}}
+        BIN: {{name}}
+        GIT_REVISION: ${GIT_REVISION:-}
+    image: {{name}}
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      SERVICEKIT_ORCHESTRATOR_URL: ${SERVICEKIT_ORCHESTRATOR_URL:-}
+      SERVICEKIT_HOST: {{name}}
+      SERVICEKIT_PORT: "8000"
+    volumes:
+      - data:/work/data
+
+volumes:
+  data:

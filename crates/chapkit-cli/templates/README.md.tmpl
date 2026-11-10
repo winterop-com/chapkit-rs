@@ -1,0 +1,22 @@
+# {{title}}
+
+A Chap forecasting model served with [chapkit-rs](https://github.com/winterop-com/chapkit-rs): it speaks the
+chapkit HTTP API, so chap-core registers and runs it like any chapkit model.
+
+| file | |
+|---|---|
+| `src/model.rs` | **the calculation**: how a forecast is made, as plain commented functions |
+| `src/lib.rs` | the chapkit `Model`: configuration, per-location splitting, the prediction table |
+| `src/main.rs` | the service |
+| `tests/model.rs` | trains and forecasts on generated data |
+
+```sh
+cargo test                       # the model's tests
+cargo run --release              # serve on http://127.0.0.1:8000 (docs at /docs)
+chapkit-rs test                  # in another terminal: run chap-core's flow against it
+docker compose up --build        # or run it in Docker, on port 8000
+```
+
+Run `cargo build` once before the first `docker compose up`: the image builds from `Cargo.lock`. To register with
+chap-core, set `SERVICEKIT_ORCHESTRATOR_URL` (and `SERVICEKIT_HOST`, `SERVICEKIT_PORT` to the address chap-core
+can reach this service on).

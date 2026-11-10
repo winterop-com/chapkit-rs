@@ -29,6 +29,17 @@ chap-core's own built-in baselines, to six decimals.
 
 Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-process Rust models.
 
+## Getting started
+
+```sh
+cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
+chapkit-rs init my-model && cd my-model     # a model package: the calculation in src/model.rs
+cargo run --release                         # serve on http://127.0.0.1:8000
+chapkit-rs test                             # in another terminal: chap-core's flow against it
+```
+
+The [tutorials](https://winterop-com.github.io/chapkit-rs/tutorials/install.html) walk through it step by step.
+
 ## Documentation
 
 **The book** is online at <https://winterop-com.github.io/chapkit-rs/> (source in `docs/`; `make docs`,

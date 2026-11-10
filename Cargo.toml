@@ -80,6 +80,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 http-body-util = "0.1"
 lru = "0.16"
 rayon = "1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
 chapkit-xai = { path = "crates/chapkit-xai" }
 async-trait = "0.1"
 futures-util = "0.3"

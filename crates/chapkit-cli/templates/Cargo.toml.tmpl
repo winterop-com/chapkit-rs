@@ -1,0 +1,21 @@
+[package]
+name = "{{name}}"
+description = "{{title}}: a Chap forecasting model served with chapkit-rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+{{chapkit_dependency}}
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

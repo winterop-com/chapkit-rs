@@ -2,7 +2,7 @@
 
 ```rust,ignore
 chapkit::Service::new("id", "Display name", model)
-    .version("1.0.0")              // MLServiceInfo.version
+    .version(env!("CARGO_PKG_VERSION")) // MLServiceInfo.version (default 1.0.0)
     .description("...")
     .database("data/chapkit.db")   // default: DATABASE_URL, else in memory
     .max_concurrency(1)            // jobs at once
@@ -17,6 +17,14 @@ tests and benchmarks.
 
 The binary prints `INFO:     Uvicorn running on http://HOST:PORT`, the line chap-core's MLproject runner
 waits for. All environment variables are listed in the [reference](../reference/environment.md).
+
+## Bump the version with every published change
+
+chap-core stores a model template once per version, together with the git revision the service reports
+(`GIT_REVISION`, set by the Docker build). A version is write-once: when an image built from a newer commit
+reports the same version, chap-core keeps the old template and refuses to run the model ("A version is
+write-once, so the new revision needs a new version label"). Take the version from the crate, as the `init`
+template does, and bump it in `Cargo.toml` whenever you publish a changed model.
 
 ## Use a database file in deployments
 

@@ -141,8 +141,9 @@ compared with its original through chap-core.
 
 ## 6. Swap in a new build of a model
 
-After changing a model, publish its images (push to `main`; the image workflow builds them) and replace the
-running ones:
+After changing a model, bump its version (the workspace `version` in chapkit-rs-models' `Cargo.toml`; chap-core
+refuses a new build under an old version, finding 6), publish its images (push to `main`; the image workflow builds
+them) and replace the running ones:
 
 ```sh
 for m in global_median seasonal_median seasonal_shift_persistence; do cdx models remove baseline_$m; done
@@ -161,13 +162,123 @@ works if it was built for linux/amd64 (finding 5).
 <http://localhost:8780/apps/dhis2-chapmodeling-app>. The Models page took about 10 seconds to load its 19
 configured models.
 
+## 8. Give a district its missing geometry
+
+The demo database's district "0710 Xon" (`X8kOf41v0rx`) has no geometry. The Modeling App needs a geometry for every
+location, so the district datasets below cannot be built until it has one. Give it a small square at the centre of its
+province (Houaphan, `hdeC7uX9Cko`); it is fake, but any polygon will do for a test:
+
+```sh
+curl -s -u admin:district 'http://localhost:8780/api/organisationUnits/hdeC7uX9Cko.json?fields=geometry' > houaphan.json
+python3 - > xon-patch.json <<'EOF'
+import json
+g = json.load(open("houaphan.json"))["geometry"]
+def pts(c):
+    if isinstance(c[0], (int, float)): yield c
+    else:
+        for x in c: yield from pts(x)
+xs, ys = zip(*pts(g["coordinates"]))
+cx, cy, d = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, 0.025
+square = [[cx-d, cy-d], [cx+d, cy-d], [cx+d, cy+d], [cx-d, cy+d], [cx-d, cy-d]]
+print(json.dumps([{"op": "add", "path": "/geometry", "value": {"type": "Polygon", "coordinates": [square]}}]))
+EOF
+curl -s -u admin:district -X PATCH -H 'Content-Type: application/json-patch+json' \
+  --data @xon-patch.json http://localhost:8780/api/organisationUnits/X8kOf41v0rx
+```
+
+## 9. Create datasets
+
+The Modeling App's **Datasets** page imports data from DHIS2 once and reuses it across evaluations: **New dataset**,
+pick the data element, the org units, the period type and range, and the target column. Two were used here, both from
+the dengue cases data element (`SK9a8nJJTAI`):
+
+| id | org units | periods | locations | note |
+|---|---|---|---|---|
+| 1 | provinces (level 2) | monthly, 2019-01 to 2024-12 | 18 | small; enough for a first check |
+| 2 | districts (level 3) | weekly, 2019W02 to 2024W52 | 136 | "Laos districts weekly 2019-2024"; needs step 8 |
+
+The facility level has no dengue data in the demo database, so districts are the largest set it offers; the district
+series are sparse (many zero or missing weeks). To list what chap-core stored:
+
+```sh
+cdx api GET /v1/crud/datasets
+```
+
+## 10. Run an evaluation
+
+**Evaluate**, **New evaluation**, tab **Use saved dataset**:
+
+1. Name it, pick the dataset (the target column comes from the dataset).
+2. **Select models**: tick the models, then **Use selected models**.
+3. Backtest parameters: for weekly data the defaults became 12 forecast periods, 7 splits, step 4, 1 training run.
+4. Future-weather provider: **Seasonal climatology**.
+5. **Start evaluation**; the app moves to **Jobs**.
+
+chap-core also runs its built-in baselines (global median, persistence, seasonal median, seasonal shift persistence)
+with every evaluation, as the reference the app compares against (finding 7). Each chapkit-rs model is a separate
+backtest job. Follow them with:
+
+```sh
+cdx api GET /v1/jobs
+```
+
+To compare the ports with the built-ins, read the metrics of the backtest specification (one per evaluation); its
+`backtests` are the selected models and its `baselines` the built-ins:
+
+```sh
+cdx api GET /v1/crud/backtest-specifications/2
+```
+
+To sample CPU and memory while it runs, poll `docker stats` for the worker, chap-core and the model containers:
+
+```sh
+while :; do
+  docker stats --no-stream --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}}' \
+    $(docker ps --format '{{.Names}}' | grep -E 'worker|chap-1|median|persistence') >> stats.csv
+done
+```
+
+## 11. Results
+
+All on an Apple Silicon laptop, with the whole stack emulated as linux/amd64 (finding 5), so the times are only
+comparable with each other.
+
+**Accuracy.** The ports give the built-ins' metrics to ten decimals:
+
+| evaluation | model | crps | mae | rmse | coverage 10-90 |
+|---|---|---|---|---|---|
+| 1: 18 provinces monthly, 3 periods, 7 splits | seasonal median | 27.1944240520 | 30.4953271028 | 46.2400448156 | 0.6261682243 |
+| 2: 136 districts weekly, 12 periods, 7 splits | global median | 2.2518619012 | 2.6640580535 | 5.0445017319 | 0.9408081958 |
+| 2 | seasonal median | 4.5017012082 | 5.3167330677 | 10.1044558714 | 0.3918611269 |
+| 2 | seasonal shift persistence | 3.2495319309 | 4.0936462610 | 8.3621875534 | 0.5412635174 |
+
+Every metric of every model is identical except one: seasonal shift persistence's `ratio_above_truth` is 0.5116505407
+for the port and 0.5116476949 for the built-in. One sample in about 350,000 that equals the observation exactly in
+Python lands one rounding step above it in Rust (finding 9).
+
+**Time, CPU and memory** (evaluation 2, all 11 jobs running at once):
+
+| | wall time per backtest | CPU peak | memory peak |
+|---|---|---|---|
+| chap-core built-in baseline | 18-21 s | in the worker | in the worker |
+| chapkit-rs model, through chap-core | 47-48 s | 9-20 % of a core | 76-114 MiB |
+| chap-core worker (all jobs) | | 1143 % | 5.7 GiB |
+
+The chapkit-rs services did very little of that time: `$train` took 151 ms and each `$predict` 40-90 ms, JSON decoding
+included, and the first job poll found each job done. The rest is chap-core's worker: 9 s before it posts `$train`
+and about 4 s around each of the 7 predictions (finding 8).
+
 ## Findings
 
 | # | finding | where | status |
 |---|---|---|---|
-| 1 | The ports register with the same display names as chap-core's built-in baselines ("Global median", ...), so the Modeling App's model list shows two entries with one name, told apart only by the author. | chapkit-rs-models | open |
-| 2 | The ports declare `author_assessed_status: green`; chap-core rates its identical built-ins `red` (baselines are yardsticks, not forecasting models). | chapkit-rs-models | open |
-| 3 | `organization` and `documentation_url` are empty; the models book is the obvious documentation URL. The library supports both. | chapkit-rs-models | open |
+| 1 | The ports register with the same display names as chap-core's built-in baselines ("Global median", ...), so the Modeling App's model list shows two entries with one name, told apart only by the author. | chapkit-rs-models | fixed: names end in "(crs)" |
+| 2 | The ports declare `author_assessed_status: green`; chap-core rates its identical built-ins `red` (baselines are yardsticks, not forecasting models). | chapkit-rs-models | fixed: red |
+| 3 | `organization` and `documentation_url` are empty; the models book is the obvious documentation URL. The library supports both. | chapkit-rs-models | fixed: documentation and repository URLs |
 | 4 | The Python reference model ships an amd64-only image; the chapkit-rs images are built for amd64 and arm64. | marketplace | noted |
 | 5 | chap-devops pins every model, and chap-core, to `linux/amd64` (most marketplace images are amd64-only), so on Apple Silicon the whole stack runs emulated, the chapkit-rs images included, although they ship arm64. It also only accepts locally built model images for linux/amd64: a native arm64 build from `make docker-build` is refused ("not in the local image store for linux/amd64"). Running natively needs `cdx run` outside a deployment. | chap-devops | open (chap-devops' call) |
-| 6 | Retiring a model (`cdx models remove`) and registering a new build does not change what chap-core already stored: its model templates kept the old display names and status. | chap-core | checking |
+| 6 | Retiring a model (`cdx models remove`) and registering a new build does not change what chap-core already stored: its model templates kept the old display names and status. chap-core does this by design: a template version is write-once, and since the new build reported the same version (1.0.0, the `Service` default) from a new git revision, chap-core logged a revision conflict and refuses to run the model until the version changes. The ports now report their crate version. | chapkit-rs-models | fixed: version 1.0.1 |
+| 7 | chap-core runs its four built-in baselines with every evaluation, so ticking the built-ins as models as well runs them twice. | Modeling App | noted |
+| 8 | A chapkit model backtest took 47 s against 19 s for a built-in, although the service itself answered in under a second in total: the time is chap-core's REST wrapper (9 s before `$train`, about 4 s per split). This is the overhead the in-process fast paths avoid; it is on chap-core's side. | chap-core | open |
+| 9 | Seasonal shift persistence differs from the built-in in the last bit of some samples (at most 3.5e-16), enough to flip one tie with the observation in about 350,000 samples (`ratio_above_truth` off by 2.8e-6). | chapkit-rs-models | open: match Python's operation order |
+| 10 | District "0710 Xon" has no geometry in the demo database, which blocks district datasets (step 8). | DHIS2 demo data | worked around |

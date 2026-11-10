@@ -2,7 +2,7 @@
 
 A model package is a Rust crate that depends on `chapkit`, implements `Model`, and has a `main` that serves
 it. The packages in `chapkit-rs-models` are complete examples: the three `baseline-*` ports of chap-core's
-baselines and `ridge`. Each keeps its calculation in `src/model.rs` (plain functions over numbers), the chapkit
+baselines. Each keeps its calculation in `src/model.rs` (plain functions over numbers), the chapkit
 plumbing in `src/lib.rs` and the binary in `src/main.rs`; `chapkit::locations` does the per-location splitting,
 parallelism and prediction table.
 
@@ -119,7 +119,7 @@ same minor version (`chapkit::polars` re-exports the one in use); cargo merges t
 - **Statistical models** with nothing to store use `type Trained = ()` and do their work in `predict`
   from `input.historic`.
 - **Models with weights** override `Model::save` and `Model::load` to store tensors in the safetensors
-  checkpoint; see `ridge`.
+  checkpoint (`Checkpoint::tensors`, `Tensor`).
 - **Hyperparameters** are declared with `Model::search_space` in chap-core's format and published in
   `/api/v1/info` as `hpo_search_space`.
 - **Errors**: return `Error::InvalidInput` for data the model cannot handle; the job fails with

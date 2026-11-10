@@ -24,7 +24,7 @@ when a call is a plain function call, not a 2-3 s job round trip.
   chapkit-compatible API; re-exports the crates above.
 - `tests/contract.rs`: the chapkit HTTP contract end to end, with a tiny model defined in the test.
 - Model packages live in the sibling repository `../chapkit-rs-models` (chap-core baseline ports with
-  parity tests, ridge). They depend on this library by path; update them with every library change and run
+  parity tests). They depend on this library by path; update them with every library change and run
   `make models-check`.
 
 ## Workflow

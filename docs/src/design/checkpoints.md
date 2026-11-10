@@ -12,7 +12,7 @@ provenance.
 
 **The defaults:** `Model::save` stores the trained state as JSON state with no tensors, which suits the
 baselines (quantile tables) and most statistical models. A model with real weights overrides `save` and
-`load`; the ridge example stores its coefficients, means and standard deviations as tensors.
+`load`, storing its weights as tensors (`Tensor`) in the checkpoint.
 
 **Provenance:** every checkpoint written by the service records the model id and version, the chapkit-rs
 version, when it was written, the config, the locations, and `trained_until`: the last period in the

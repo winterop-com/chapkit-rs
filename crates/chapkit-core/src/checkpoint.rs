@@ -297,7 +297,7 @@ mod tests {
             );
         let ck = Checkpoint {
             provenance: Provenance {
-                model: "ridge".into(),
+                model: "demo".into(),
                 trained_until: Some("2021-04".into()),
                 ..Provenance::default()
             },

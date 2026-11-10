@@ -12,7 +12,7 @@ layers above them.
 | `chapkit-store` | persistence | the `Store` trait and its SQLite backend. No HTTP |
 | `chapkit` (root) | service | wires a `Model` to all of the above: configs, artifacts, ML routes, the warm model cache, `Service` |
 
-Model packages (the chap-core baselines, ridge) live in a separate repository, `chapkit-rs-models`, and
+Model packages (the chap-core baselines) live in a separate repository, `chapkit-rs-models`, and
 depend on `chapkit` like any downstream project would.
 
 ## A request through the stack

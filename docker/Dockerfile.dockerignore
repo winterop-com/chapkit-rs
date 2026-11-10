@@ -1,0 +1,10 @@
+# Relative to the build context (the directory holding the checkouts). Build output and local
+# environments are never needed in the image.
+**/target
+*/bin
+**/.git
+**/docs/book
+**/.venv
+**/__pycache__
+**/node_modules
+**/*.db

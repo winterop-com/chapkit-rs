@@ -109,3 +109,44 @@ pub fn router(checks: Checks) -> OpenApiRouter {
         .routes(routes!(stream_health))
         .with_state(checks)
 }
+
+/// Check a running service's `/health` on `127.0.0.1:port`: `Ok` only for HTTP 200 with
+/// `"status": "healthy"`. Used by `<binary> healthcheck` (see [`crate::App::serve`]), which
+/// container health checks call, since minimal images have no curl.
+pub async fn probe(port: u16) -> std::io::Result<()> {
+    let url = format!("http://127.0.0.1:{port}/health");
+    let res = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(std::io::Error::other)?
+        .get(&url)
+        .send()
+        .await
+        .map_err(std::io::Error::other)?;
+    let ok = res.status().is_success();
+    let body: serde_json::Value = res.json().await.map_err(std::io::Error::other)?;
+    if ok && body.get("status").and_then(serde_json::Value::as_str) == Some("healthy") {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("{url}: {body}")))
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn probe_reports_healthy_and_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (router, _) = router(Checks::default()).split_for_parts();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        probe(port).await.unwrap();
+        // Nothing listens on the port after this one is dropped.
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unused = free.local_addr().unwrap().port();
+        drop(free);
+        assert!(probe(unused).await.is_err());
+    }
+}

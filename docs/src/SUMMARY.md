@@ -23,6 +23,7 @@
 
 - [Writing a model package](guide/model-package.md)
 - [Serving and configuration](guide/serving.md)
+- [Docker](guide/docker.md)
 - [Testing with chap-core](guide/chap-core.md)
 - [Sample data](guide/sample-data.md)
 

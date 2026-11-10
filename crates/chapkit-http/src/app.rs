@@ -151,7 +151,17 @@ impl App {
     }
 
     /// Serve on `HOST:PORT` (defaults `127.0.0.1:8000`) until Ctrl-C / SIGTERM.
+    ///
+    /// Run with the argument `healthcheck` instead, the binary checks the service already running
+    /// on `PORT` and exits with an error unless it is healthy (for container health checks).
     pub async fn serve(self) -> std::io::Result<()> {
+        if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8000);
+            return crate::health::probe(port).await;
+        }
         init_tracing();
         let (router, _, registration, id, info) = self.build();
         let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());

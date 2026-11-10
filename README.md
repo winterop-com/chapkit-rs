@@ -31,7 +31,8 @@ Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-pro
 
 ## Documentation
 
-The book in `docs/` (`make docs`, `make docs-serve`) explains the approach, every design decision, how to
+**The book** is online at <https://winterop-com.github.io/chapkit-rs/> (source in `docs/`; `make docs`,
+`make docs-serve`). It explains the approach, every design decision, how to
 write and serve a model package, testing with chap-core, and the results.
 
 ## Layout

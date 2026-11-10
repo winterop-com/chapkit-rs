@@ -51,9 +51,10 @@ jobs:
         working-directory: ${{ runner.temp }}/ci-model
         run: |
           cargo build --release
-          PORT=8000 target/release/ci-model &
+          target/release/ci-model serve --port 8000 &
           for _ in $(seq 1 50); do curl -sf localhost:8000/health && break; sleep 0.2; done
           "$GITHUB_WORKSPACE/target/release/chapkit-rs" test
+          target/release/ci-model test --port 8000
 
   docs:
     name: Build the book

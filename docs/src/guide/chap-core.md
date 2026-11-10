@@ -12,7 +12,7 @@ cdx up --wait
 REV=$(git rev-parse HEAD)
 SERVICEKIT_ORCHESTRATOR_URL='http://localhost:8700/v2/services/$register' \
 SERVICEKIT_HOST=host.docker.internal SERVICEKIT_PORT=8001 \
-HOST=0.0.0.0 PORT=8001 GIT_REVISION=$REV bin/baseline-global-median
+HOST=0.0.0.0 PORT=8001 GIT_REVISION=$REV bin/baseline-global-median serve
 
 cdx status                                   # the service is listed as unmanaged, with a recent ping
 cdx models configs sync global-median        # chap-core configured model with the defaults

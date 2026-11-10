@@ -27,7 +27,7 @@ base image, running as uid 1000, with its database in a volume and a health chec
 chapkit-rs test
 ```
 
-passes exactly as against `cargo run`: the container serves on port 8000.
+passes exactly as against `cargo run -- serve`: the container serves on port 8000.
 
 ## 3. Publish it
 

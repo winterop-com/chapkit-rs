@@ -20,6 +20,8 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - `crates/chapkit-http`: HTTP plumbing with no model knowledge: problem+json errors, job scheduler,
   health, system, info, API keys, request ids, orchestrator registration, OpenAPI.
 - `crates/chapkit-store`: async `Store` trait and its SQLite backend (rusqlite); no HTTP.
+- `crates/chapkit-flow`: chap-core's flow as a test against a running service over HTTP; used by `chapkit-rs test`
+  and every model binary's `test` subcommand.
 - `crates/chapkit-cli`: the `chapkit-rs` command: `init` (scaffold a model package from `templates/`) and `test`
   (chap-core's flow against a running service). `init` copies `docker/Dockerfile`, so keep the templates working
   with it; CI scaffolds a package and runs it on every push.

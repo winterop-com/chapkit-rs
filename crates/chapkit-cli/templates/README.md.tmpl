@@ -12,8 +12,9 @@ chapkit HTTP API, so chap-core registers and runs it like any chapkit model.
 
 ```sh
 cargo test                       # the model's tests
-cargo run --release              # serve on http://127.0.0.1:8000 (docs at /docs)
-chapkit-rs test                  # in another terminal: run chap-core's flow against it
+cargo run --release -- serve     # serve on http://127.0.0.1:8000 (docs at /docs)
+cargo run --release -- test      # in another terminal: run chap-core's flow against it
+cargo run --release -- --help    # all commands and options (--host, --port, --database, ...)
 docker compose up --build        # or run it in Docker, on port 8000
 ```
 

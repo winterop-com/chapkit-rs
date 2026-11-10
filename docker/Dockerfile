@@ -12,7 +12,7 @@
 #         -t baseline-global-median .
 #
 # The image holds the one binary on a minimal base (no shell, no package manager), runs as uid 1000,
-# serves on 0.0.0.0:8000, and keeps its SQLite database in /work/data (mount a volume there). The
+# serves (`service serve`) on 0.0.0.0:8000, and keeps its SQLite database in /work/data (mount a volume there). The
 # root filesystem can be read-only; only /work/data is written.
 
 ARG RUST_IMAGE=rust:1.99-slim-trixie
@@ -53,3 +53,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD ["/usr/local/bin/service", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/service"]
+CMD ["serve"]

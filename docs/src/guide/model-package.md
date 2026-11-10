@@ -68,7 +68,7 @@ impl Model for MeanModel {
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> std::process::ExitCode {
     chapkit::Service::new("mean", "Mean", MeanModel)
         .description("Per-location mean")
         .serve()

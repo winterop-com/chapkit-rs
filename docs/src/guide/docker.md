@@ -39,7 +39,8 @@ the build context.
 | filesystem | can be read-only; only `/work/data` is written |
 | health | `HEALTHCHECK` runs `service healthcheck`, which calls the running service's `/health` (minimal images have no curl) |
 
-Every chapkit-rs binary accepts `healthcheck` as its first argument: it checks the service on `PORT` and exits
+The image's command is `service serve`; `docker run <image> test` runs chap-core's flow against a running
+service instead. Every chapkit-rs binary has a `healthcheck` subcommand: it checks the service on `PORT` and exits
 with an error unless the service reports `healthy`.
 
 ## Several models: compose

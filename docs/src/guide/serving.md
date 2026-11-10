@@ -15,8 +15,58 @@ chapkit::Service::new("id", "Display name", model)
 `Service::app()` returns the app instead of serving it; `app.build()` gives an axum `Router` for in-process
 tests and benchmarks.
 
+`serve()` is the binary's `main`: it parses the command line, so every model binary has the same commands
+([reference](../reference/cli.md#a-model-binary)):
+
+```sh
+my-model serve                      # serve on 127.0.0.1:8000
+my-model serve --port 8001 --database data/chapkit.db
+my-model test --locations 10        # in another terminal: chap-core's flow against it
+my-model healthcheck                # exit 0 when the running service is healthy
+my-model --help
+```
+
+Without arguments the binary prints its help. A failing command prints one line, such as
+`error: no service at http://127.0.0.1:8000` or `error: cannot listen on 127.0.0.1:8000: Address already in use`,
+and exits with code 1. Each option of `serve` falls back to its environment variable
+(`HOST`, `PORT`, `DATABASE_URL`, `CHAPKIT_MAX_CONCURRENCY`), so containers and chap-devops can keep configuring it
+with environment variables; a flag wins over both the variable and the builder.
+
 The binary prints `INFO:     Uvicorn running on http://HOST:PORT`, the line chap-core's MLproject runner
 waits for. All environment variables are listed in the [reference](../reference/environment.md).
+
+## Commands of your own
+
+A binary with subcommands of its own (the baselines' `demo`) flattens chapkit's into its clap enum and hands
+them to `Service::run`:
+
+```rust,ignore
+#[derive(clap::Parser)]
+#[command(arg_required_else_help = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    #[command(flatten)]
+    Chapkit(chapkit::cli::Command),
+    /// Run once on example data
+    Demo,
+}
+
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
+    let service = chapkit::Service::new("my-model", "My model", MyModel);
+    // --help and --version show the service's name and version
+    let result = match service.parse_args::<Cli>().command {
+        Command::Demo => demo(),
+        Command::Chapkit(command) => service.run(command).await,
+    };
+    chapkit::cli::exit_code(result) // on error: one line `error: ...`, exit code 1
+}
+```
 
 ## Bump the version with every published change
 

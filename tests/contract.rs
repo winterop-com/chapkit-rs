@@ -737,3 +737,119 @@ async fn model_validation_hooks() {
     assert_eq!(codes(&v), ["short_history"]);
     assert_eq!(v["diagnostics"][0]["severity"], "warning");
 }
+
+/// The flow behind `chapkit-rs test` and a model binary's `test`, over HTTP against a served app;
+/// and the check that tells the binary's `test` nothing is running.
+#[tokio::test]
+async fn test_command_flow_over_http() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = app().await;
+    tokio::spawn(async move { axum::serve(listener, router).await });
+
+    let cli = <chapkit::cli::Cli as clap::Parser>::try_parse_from([
+        "mean",
+        "test",
+        "--url",
+        &url,
+        "--locations",
+        "3",
+        "--configs",
+        "2",
+        "--seed",
+        "7",
+    ])
+    .unwrap();
+    let chapkit::cli::Command::Test(t) = cli.command else {
+        panic!("expected test")
+    };
+    assert!(chapkit::flow::reachable(&url).await);
+    chapkit::flow::run(&url, &t.flow).await.unwrap();
+
+    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unused = format!("http://{}", free.local_addr().unwrap());
+    drop(free);
+    assert!(!chapkit::flow::reachable(&unused).await);
+}
+
+/// Trains slowly, so jobs overlap.
+struct SlowModel;
+
+impl Model for SlowModel {
+    type Config = MeanConfig;
+    type Trained = f64;
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &MeanConfig, _: TrainInput<'_>) -> ModelResult<f64> {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Ok(1.0)
+    }
+
+    fn predict(&self, _: &f64, _: &MeanConfig, input: PredictInput<'_>) -> ModelResult<DataFrame> {
+        prediction_frame(input.future, 1, |_, out| {
+            out.fill(1.0);
+            Ok(())
+        })
+    }
+}
+
+/// Three `$train` jobs on a service allowed two at once: two run, one waits, then all complete.
+async fn check_two_jobs_at_once(service: chapkit::Service) {
+    let app = service
+        .database(":memory:")
+        .eager_wait(std::time::Duration::ZERO)
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let data = fixture()["train"].clone();
+    for _ in 0..3 {
+        assert_eq!(train_model(&app, &data).await.0, StatusCode::ACCEPTED);
+    }
+    let count = |jobs: &Value, status: &str| {
+        jobs.as_array()
+            .unwrap()
+            .iter()
+            .filter(|j| j["status"] == status)
+            .count()
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (_, jobs, _) = call(&app, "GET", "/api/v1/jobs", None).await;
+    assert_eq!(
+        (count(&jobs, "running"), count(&jobs, "pending")),
+        (2, 1),
+        "{jobs}"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (_, jobs, _) = call(&app, "GET", "/api/v1/jobs", None).await;
+        if count(&jobs, "completed") == 3 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{jobs}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// `max_concurrency` and `serve --max-concurrency` reach the job scheduler.
+#[tokio::test]
+async fn max_concurrency_limits_running_jobs() {
+    check_two_jobs_at_once(chapkit::Service::new("slow", "Slow", SlowModel).max_concurrency(2))
+        .await;
+    let cli = <chapkit::cli::Cli as clap::Parser>::try_parse_from([
+        "slow",
+        "serve",
+        "--max-concurrency",
+        "2",
+    ])
+    .unwrap();
+    let chapkit::cli::Command::Serve(args) = cli.command else {
+        panic!("expected serve")
+    };
+    check_two_jobs_at_once(chapkit::Service::new("slow", "Slow", SlowModel).with_serve_args(&args))
+        .await;
+}

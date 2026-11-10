@@ -165,8 +165,8 @@ pub fn run(
     println!();
     println!("  cd {}", dir.display());
     println!("  cargo test                  # the model's tests");
-    println!("  cargo run --release         # serve on http://127.0.0.1:8000");
-    println!("  chapkit-rs test             # in another terminal: chap-core's flow against it");
+    println!("  cargo run --release -- serve  # serve on http://127.0.0.1:8000");
+    println!("  cargo run --release -- test   # in another terminal: chap-core's flow against it");
     println!();
     println!("The calculation to replace with your model is in src/model.rs.");
     if !wiring.from_git {

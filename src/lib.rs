@@ -8,6 +8,7 @@
 //! Model packages, starting with ports of chap-core's baselines, live in the
 //! separate chapkit-rs-models repository and are not part of the library.
 
+pub mod cli;
 mod erased;
 mod ml;
 mod routes;
@@ -20,6 +21,7 @@ pub use chapkit_dataframe as dataframe;
 /// polars, at the version `DataFrame::to_polars` / `from_polars` use (feature `polars`).
 #[cfg(feature = "polars")]
 pub use chapkit_dataframe::polars;
+pub use chapkit_flow as flow;
 pub use chapkit_http as http;
 pub use chapkit_store as store;
 pub use chapkit_xai as xai;

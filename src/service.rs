@@ -1,5 +1,6 @@
 //! [`Service`]: turn a [`Model`] into a chapkit-compatible HTTP service.
 
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use chapkit_http::{App, HealthState, Scheduler};
 use chapkit_store::{Store, StoreError};
 use serde_json::{Value, json};
 
+use crate::cli::{self, Cli, Command, ServeArgs};
 use crate::erased::{DynModel, Erased};
 use crate::routes;
 use crate::state::AppState;
@@ -180,12 +182,176 @@ impl Service {
             .nest("/api/v1/jobs", chapkit_http::jobs::router(jobs)))
     }
 
-    /// Build and serve on `HOST:PORT` until shutdown.
-    pub async fn serve(self) -> std::io::Result<()> {
-        self.app()
-            .await
-            .map_err(std::io::Error::other)?
-            .serve()
-            .await
+    /// The binary's `main`: parse the command line ([`Cli`]) and [`run`](Self::run) it. Without
+    /// arguments the binary prints its help; an error is printed as one line `error: ...` and
+    /// the exit code is 1.
+    pub async fn serve(self) -> ExitCode {
+        let cli: Cli = self.parse_args();
+        cli::exit_code(self.run(cli.command).await)
+    }
+
+    /// Parse the command line into `P`, with this service's id, version and display name in
+    /// `--help` and `--version`. Exits with clap's message on `--help`, `--version` or bad input.
+    pub fn parse_args<P: clap::Parser>(&self) -> P {
+        P::from_arg_matches(&self.command::<P>().get_matches()).unwrap_or_else(|e| e.exit())
+    }
+
+    /// The clap command for `P`, named after the service; `--version` also names the chapkit-rs
+    /// version it was built with (`global-median 1.0.2 (chapkit-rs 0.1.0)`).
+    fn command<P: clap::Parser>(&self) -> clap::Command {
+        P::command()
+            .name(self.id.clone())
+            .version(format!(
+                "{} (chapkit-rs {})",
+                self.version,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .about(self.display_name.clone())
+    }
+
+    /// Apply `serve`'s `--database` and `--max-concurrency`, when given, over the builder and the
+    /// environment. The order is flag, builder, environment variable, default.
+    #[must_use]
+    pub fn with_serve_args(mut self, args: &ServeArgs) -> Self {
+        if let Some(url) = &args.database {
+            self.database_url = Some(url.clone());
+        }
+        if let Some(n) = args.max_concurrency {
+            self = self.max_concurrency(n);
+        }
+        self
+    }
+
+    /// Run a [`Command`]: `serve` until shutdown (`--database` and `--max-concurrency` override the
+    /// builder and the environment), `test` the running service, or `healthcheck` it.
+    pub async fn run(mut self, command: Command) -> std::io::Result<()> {
+        match command {
+            Command::Healthcheck(address) => chapkit_http::health::probe(&address.url()).await,
+            Command::Test(test) => {
+                let url = cli::test_url(&test);
+                if !chapkit_flow::reachable(&url).await {
+                    let bin = std::env::args().next().unwrap_or_else(|| self.id.clone());
+                    return Err(std::io::Error::other(format!(
+                        "no service at {url}; start it first with `{bin} serve`"
+                    )));
+                }
+                chapkit_flow::run(&url, &test.flow)
+                    .await
+                    .map_err(std::io::Error::other)
+            }
+            Command::Serve(args) => {
+                self = self.with_serve_args(&args);
+                self.app()
+                    .await
+                    .map_err(std::io::Error::other)?
+                    .serve(&args.address.host, args.address.port)
+                    .await
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::Address;
+    use crate::{ModelInfo, NoConfig, PredictInput, Result as ModelResult, TrainInput};
+
+    struct Nop;
+
+    impl Model for Nop {
+        type Config = NoConfig;
+        type Trained = ();
+
+        fn info(&self) -> ModelInfo {
+            ModelInfo::default()
+        }
+
+        fn train(&self, _: &NoConfig, _: TrainInput<'_>) -> ModelResult<()> {
+            Ok(())
+        }
+
+        fn predict(
+            &self,
+            (): &(),
+            _: &NoConfig,
+            input: PredictInput<'_>,
+        ) -> ModelResult<chapkit_dataframe::DataFrame> {
+            crate::prediction_frame(input.future, 1, |_, _| Ok(()))
+        }
+    }
+
+    fn args(max_concurrency: Option<usize>) -> ServeArgs {
+        ServeArgs {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 8000,
+            },
+            database: None,
+            max_concurrency,
+        }
+    }
+
+    /// Runs `test` again in a child process with `env`, since setting variables in this process
+    /// is unsafe and the crate forbids unsafe code; `true` in the child.
+    fn in_child(test: &str, env: &[(&str, &str)]) -> bool {
+        if std::env::var_os("CHAPKIT_SERVICE_CHILD").is_some() {
+            return true;
+        }
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", test, "--nocapture"])
+            .env("CHAPKIT_SERVICE_CHILD", "1")
+            .env_remove("CHAPKIT_MAX_CONCURRENCY");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        false
+    }
+
+    #[test]
+    fn version_names_the_chapkit_rs_version() {
+        let service = Service::new("my-model", "My model", Nop).version("1.2.3");
+        let version = service.command::<crate::cli::Cli>().render_version();
+        assert_eq!(
+            version.trim(),
+            format!("my-model 1.2.3 (chapkit-rs {})", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn max_concurrency_default_then_builder_then_flag() {
+        if !in_child(
+            "service::tests::max_concurrency_default_then_builder_then_flag",
+            &[],
+        ) {
+            return;
+        }
+        assert_eq!(Service::new("m", "M", Nop).max_concurrency, 1);
+        let built = Service::new("m", "M", Nop).max_concurrency(3);
+        assert_eq!(built.max_concurrency, 3);
+        assert_eq!(built.with_serve_args(&args(None)).max_concurrency, 3);
+        let flagged = Service::new("m", "M", Nop)
+            .max_concurrency(3)
+            .with_serve_args(&args(Some(5)));
+        assert_eq!(flagged.max_concurrency, 5);
+    }
+
+    #[test]
+    fn max_concurrency_flag_over_env_over_default() {
+        if !in_child(
+            "service::tests::max_concurrency_flag_over_env_over_default",
+            &[("CHAPKIT_MAX_CONCURRENCY", "4")],
+        ) {
+            return;
+        }
+        assert_eq!(Service::new("m", "M", Nop).max_concurrency, 4);
+        let flagged = Service::new("m", "M", Nop).with_serve_args(&args(Some(2)));
+        assert_eq!(flagged.max_concurrency, 2);
     }
 }

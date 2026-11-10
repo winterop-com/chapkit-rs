@@ -525,6 +525,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runs_at_most_max_concurrency_jobs_at_once() {
+        use std::sync::atomic::AtomicUsize;
+        let s = Scheduler::new(2);
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let ids: Vec<Ulid> = (0..4)
+            .map(|_| {
+                let (running, peak) = (running.clone(), peak.clone());
+                s.submit(Box::pin(async move {
+                    // The model call runs on the blocking pool, as in the service.
+                    blocking(move || {
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(200));
+                        running.fetch_sub(1, Ordering::SeqCst);
+                    })
+                    .await
+                }))
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let count = |status| {
+            ids.iter()
+                .filter(|id| s.get(**id).map(|r| r.status) == Some(status))
+                .count()
+        };
+        assert_eq!(count(JobStatus::Running), 2, "two jobs run");
+        assert_eq!(count(JobStatus::Pending), 2, "the others wait");
+        for id in ids {
+            assert_eq!(s.wait(id).await.unwrap().status, JobStatus::Completed);
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn delete_cancels_queued_jobs() {
         let s = Scheduler::new(1);
         let slow = s.submit(Box::pin(async {

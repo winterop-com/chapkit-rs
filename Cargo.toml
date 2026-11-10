@@ -10,6 +10,7 @@ publish.workspace = true
 chapkit-core.workspace = true
 chapkit-dataframe.workspace = true
 chapkit-http.workspace = true
+chapkit-flow.workspace = true
 chapkit-store.workspace = true
 chapkit-xai.workspace = true
 axum.workspace = true
@@ -22,9 +23,11 @@ lru.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+clap = { workspace = true, features = ["env", "string"] }
 
 [dev-dependencies]
 axum.workspace = true
+clap.workspace = true
 http-body-util.workspace = true
 schemars.workspace = true
 serde.workspace = true
@@ -89,6 +92,7 @@ turso = { version = "0.8.3", default-features = false }
 gethostname = "1"
 chapkit-http = { path = "crates/chapkit-http" }
 chapkit-store = { path = "crates/chapkit-store" }
+chapkit-flow = { path = "crates/chapkit-flow" }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [workspace.lints.rust]

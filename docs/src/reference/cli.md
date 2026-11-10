@@ -5,8 +5,8 @@ cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
 chapkit-rs --help
 ```
 
-From a checkout, `make release` builds it into `bin/chapkit-rs` for this machine, and `make release-universal`
-builds one macOS binary for both Apple Silicon and Intel. `make install` installs it into `~/.local/bin` (or
+From a checkout, `make release` builds it into `bin/chapkit-rs`; on macOS it is one binary for both Apple
+Silicon and Intel. `make install` installs it into `~/.local/bin` (or
 `PREFIX/bin`) with `crs` as its short form, as chap-devops installs itself with `cdx`; the docs use `chapkit-rs`
 in full.
 
@@ -16,6 +16,8 @@ in full.
 | `chapkit-rs test` | test a running service (Rust or Python chapkit) |
 | `chapkit-rs artifact list` | list what a service stored, as a tree |
 | `chapkit-rs artifact download ID` | save a trained model's checkpoint or a forecast |
+
+Every model binary built with chapkit-rs has its own commands too: see [A model binary](#a-model-binary).
 
 Every command has short help with `-h`, and the details with `--help`.
 
@@ -68,9 +70,9 @@ Options:
       --seed <SEED>                Seed for the test data [default: random]
       --timeout <TIMEOUT>          Seconds to wait per job [default: 300]
       --save-data <DIR>            Save the generated data in DIR
-      --start-service              Start the package here (cargo run) first
   -v, --verbose                    Show service details and diagnostics
       --keep                       Keep what the test creates
+      --start-service              Start the package here (cargo run) first
 ```
 
 Runs chap-core's flow against a service, the same way Python chapkit's `chapkit test` does, and works against
@@ -90,7 +92,7 @@ either:
 
 It prints one line per step with its time, keeps going after a failed job, ends with a summary, and exits
 non-zero if anything failed. The seed is random unless given and printed, so a failing run can be repeated with
-`--seed`. `--save-data` writes the configurations and data it sent. `--start-service` runs `cargo run --release`
+`--seed`. `--save-data` writes the configurations and data it sent. `--start-service` runs `cargo run --release -- serve`
 for the package in the current directory, on the port of `--url`, and stops it afterwards. Unless `--keep` is
 given, the configurations it created are deleted, and with them the trained models and forecasts.
 
@@ -123,3 +125,36 @@ is measured.
 
 `download` saves a trained model as its safetensors checkpoint (weights, state and provenance) and a forecast as
 JSON records, one object per row.
+
+## A model binary
+
+A binary whose `main` is `chapkit::Service::serve()` (every package `init` creates, and the baselines) parses
+its own command line. Without arguments it prints its help:
+
+```text
+Usage: my-model <COMMAND>
+
+Commands:
+  serve        Serve the model
+  test         Test the running service
+  healthcheck  Check the running service's health
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+```text
+Usage: my-model serve [OPTIONS]
+      --host <HOST>          Service host [env: HOST] [default: 127.0.0.1]
+      --port <PORT>          Service port [env: PORT] [default: 8000]
+      --database <URL>       Database URL [env: DATABASE_URL]
+      --max-concurrency <N>  Jobs at once [env: CHAPKIT_MAX_CONCURRENCY]
+```
+
+`test` is `chapkit-rs test` built into the binary: the same options, except that it finds the service on
+`--host`/`--port` (the same defaults and variables as `serve`), so `my-model serve` in one terminal and
+`my-model test` in another need no further arguments; `--url` overrides. When nothing answers there it says so
+and exits non-zero. `healthcheck` checks the service on `--host`/`--port` and exits non-zero unless it is
+healthy; the Docker image's `HEALTHCHECK` runs it. `--version` prints the service's id and version.

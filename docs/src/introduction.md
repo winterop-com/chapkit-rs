@@ -7,7 +7,7 @@ unchanged.
 
 ```rust,ignore
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> std::process::ExitCode {
     chapkit::Service::new("my-model", "My model", MyModel).serve().await
 }
 ```

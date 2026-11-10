@@ -150,23 +150,13 @@ impl App {
         (router, doc, self.registration, self.id, self.info)
     }
 
-    /// Serve on `HOST:PORT` (defaults `127.0.0.1:8000`) until Ctrl-C / SIGTERM.
-    ///
-    /// Run with the argument `healthcheck` instead, the binary checks the service already running
-    /// on `PORT` and exits with an error unless it is healthy (for container health checks).
-    pub async fn serve(self) -> std::io::Result<()> {
-        if std::env::args().nth(1).as_deref() == Some("healthcheck") {
-            let port = std::env::var("PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(8000);
-            return crate::health::probe(port).await;
-        }
+    /// Serve on `host:port` until Ctrl-C / SIGTERM.
+    pub async fn serve(self, host: &str, port: u16) -> std::io::Result<()> {
         init_tracing();
         let (router, _, registration, id, info) = self.build();
-        let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
-        let port = std::env::var("PORT").unwrap_or_else(|_| "8000".into());
-        let listener = TcpListener::bind(format!("{host}:{port}")).await?;
+        let listener = TcpListener::bind((host, port)).await.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot listen on {host}:{port}: {e}"))
+        })?;
         // chap-core's MLproject runner waits for uvicorn's startup line; print the same.
         println!("INFO:     Uvicorn running on http://{host}:{port} (Press CTRL+C to quit)");
         tracing::info!(%host, %port, "service.start");

@@ -1,4 +1,4 @@
-.PHONY: help install release-universal check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
+.PHONY: help install check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi models-check models-release clean
 
 MODELS ?= ../chapkit-rs-models
 
@@ -12,8 +12,7 @@ help:
 	@echo "  test-turso  Run the store suite and the HTTP contract on the turso backend"
 	@echo "  test-polars  Lint and test the polars conversion (feature polars)"
 	@echo "  build     Build the workspace, tests and benches (debug)"
-	@echo "  release   Build the workspace in release mode; the chapkit-rs command into ./bin"
-	@echo "  release-universal  macOS: the chapkit-rs command for Apple Silicon and Intel in one binary"
+	@echo "  release   The chapkit-rs command into ./bin, universal on macOS"
 	@echo "  lint      Format and run clippy (warnings are errors)"
 	@echo "  fmt       Format the code"
 	@echo "  test      Run all tests"
@@ -50,18 +49,20 @@ test-turso:
 build:
 	@cargo build --workspace --all-targets
 
+# On macOS, both architectures joined with lipo into one binary (as chap-devops ships its macOS
+# build); elsewhere a native build.
 release:
-	@cargo build --workspace --release
-	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs
-	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
-
-# Both macOS architectures, joined with lipo into one binary (as chap-devops ships its macOS build).
-release-universal:
+ifeq ($(shell uname -s),Darwin)
 	@cargo build --release -p chapkit-cli --target aarch64-apple-darwin
 	@cargo build --release -p chapkit-cli --target x86_64-apple-darwin
 	@mkdir -p bin && lipo -create -output bin/chapkit-rs \
 		target/aarch64-apple-darwin/release/chapkit-rs target/x86_64-apple-darwin/release/chapkit-rs
 	@lipo -info bin/chapkit-rs
+else
+	@cargo build --release -p chapkit-cli
+	@mkdir -p bin && cp target/release/chapkit-rs bin/chapkit-rs
+endif
+	@ls -lh bin | awk 'NR>1 {print $$5, "bin/"$$9}'
 
 lint:
 	@echo ">>> Formatting"

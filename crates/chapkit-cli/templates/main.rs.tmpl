@@ -1,10 +1,12 @@
-//! Serve {{title}} as a chapkit-compatible service on HOST:PORT (default 127.0.0.1:8000).
+//! {{title}} as a chapkit-compatible service.
 //!
-//!     cargo run --release                 # serve; API docs at http://127.0.0.1:8000/docs
-//!     cargo run --release -- healthcheck  # check a running service (used by Docker)
+//!     cargo run --release -- serve        # serve; API docs at http://127.0.0.1:8000/docs
+//!     cargo run --release -- test         # chap-core's flow against the running service
+//!     cargo run --release -- healthcheck  # check the running service (used by Docker)
+//!     cargo run --release -- --help       # all commands and options
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> std::process::ExitCode {
     chapkit::Service::new("{{name}}", "{{title}}", {{crate_name}}::{{type_name}})
         .version(env!("CARGO_PKG_VERSION"))
         .serve()

@@ -588,9 +588,11 @@ dependencies = [
  "axum",
  "chapkit-core",
  "chapkit-dataframe",
+ "chapkit-flow",
  "chapkit-http",
  "chapkit-store",
  "chapkit-xai",
+ "clap",
  "http-body-util",
  "lru",
  "schemars",
@@ -609,6 +611,7 @@ name = "chapkit-cli"
 version = "0.1.0"
 dependencies = [
  "chapkit-core",
+ "chapkit-flow",
  "chapkit-store",
  "clap",
  "reqwest",
@@ -639,6 +642,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "chapkit-flow"
+version = "0.1.0"
+dependencies = [
+ "chapkit-core",
+ "clap",
+ "reqwest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

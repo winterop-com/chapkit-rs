@@ -34,8 +34,8 @@ Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-pro
 ```sh
 cargo install --git https://github.com/winterop-com/chapkit-rs chapkit-cli
 chapkit-rs init my-model && cd my-model     # a model package: the calculation in src/model.rs
-cargo run --release                         # serve on http://127.0.0.1:8000
-chapkit-rs test                             # in another terminal: chap-core's flow against it
+cargo run --release -- serve                # serve on http://127.0.0.1:8000
+cargo run --release -- test                 # in another terminal: chap-core's flow against it
 ```
 
 The [tutorials](https://winterop-com.github.io/chapkit-rs/tutorials/install.html) walk through it step by step.
@@ -89,10 +89,13 @@ impl Model for MyModel {
 
 ```rust,ignore
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> std::process::ExitCode {
     chapkit::Service::new("my-model", "My model", MyModel).serve().await
 }
 ```
+
+The binary has the subcommands `serve` (`--host`, `--port`, `--database`, `--max-concurrency`), `test`
+(chap-core's flow against the running service) and `healthcheck`; without arguments it prints its help.
 
 Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by default),
 `SERVICEKIT_ORCHESTRATOR_URL` to register with chap-core, `SERVICEKIT_API_KEYS` for auth,
@@ -103,7 +106,7 @@ Environment: `HOST`/`PORT` (127.0.0.1:8000), `DATABASE_URL` (in-memory by defaul
 
 ```sh
 make check            # lint + test; run before every commit
-make release          # release build; the chapkit-rs command into bin/
+make release          # the chapkit-rs command into bin/ (universal on macOS)
 make test-turso       # store suite and HTTP contract on the turso backend
 make test-polars      # the polars conversion (feature polars)
 make bench            # criterion benchmarks

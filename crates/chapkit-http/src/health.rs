@@ -110,11 +110,14 @@ pub fn router(checks: Checks) -> OpenApiRouter {
         .with_state(checks)
 }
 
-/// Check a running service's `/health` on `127.0.0.1:port`: `Ok` only for HTTP 200 with
-/// `"status": "healthy"`. Used by `<binary> healthcheck` (see [`crate::App::serve`]), which
+/// Check a running service's `/health` at `base` (`http://127.0.0.1:8000`): `Ok` only for HTTP 200
+/// with `"status": "healthy"`. Used by `<binary> healthcheck` (chapkit's `Service::run`), which
 /// container health checks call, since minimal images have no curl.
-pub async fn probe(port: u16) -> std::io::Result<()> {
-    let url = format!("http://127.0.0.1:{port}/health");
+///
+/// The error is one line: `no service at <base>`, or `<base>/health answered 503 (unhealthy)`.
+pub async fn probe(base: &str) -> std::io::Result<()> {
+    let base = base.trim_end_matches('/');
+    let url = format!("{base}/health");
     let res = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -122,13 +125,28 @@ pub async fn probe(port: u16) -> std::io::Result<()> {
         .get(&url)
         .send()
         .await
-        .map_err(std::io::Error::other)?;
-    let ok = res.status().is_success();
-    let body: serde_json::Value = res.json().await.map_err(std::io::Error::other)?;
-    if ok && body.get("status").and_then(serde_json::Value::as_str) == Some("healthy") {
+        .map_err(|e| {
+            std::io::Error::other(if e.is_connect() {
+                format!("no service at {base}")
+            } else if e.is_timeout() {
+                format!("{url} did not answer in 5 s")
+            } else {
+                format!("{url}: {e}")
+            })
+        })?;
+    let status = res.status();
+    let body: serde_json::Value = res.json().await.unwrap_or_default();
+    let state = body
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("no status");
+    if status.is_success() && state == "healthy" {
         Ok(())
     } else {
-        Err(std::io::Error::other(format!("{url}: {body}")))
+        Err(std::io::Error::other(format!(
+            "{url} answered {} ({state})",
+            status.as_u16()
+        )))
     }
 }
 
@@ -142,11 +160,37 @@ mod probe_tests {
         let port = listener.local_addr().unwrap().port();
         let (router, _) = router(Checks::default()).split_for_parts();
         tokio::spawn(async move { axum::serve(listener, router).await });
-        probe(port).await.unwrap();
+        probe(&format!("http://127.0.0.1:{port}")).await.unwrap();
         // Nothing listens on the port after this one is dropped.
         let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let unused = free.local_addr().unwrap().port();
         drop(free);
-        assert!(probe(unused).await.is_err());
+        let err = probe(&format!("http://127.0.0.1:{unused}"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("no service at http://127.0.0.1:{unused}")
+        );
+        // Something answers, but not a healthy chapkit service.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let sick = axum::Router::new().route(
+            "/health",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(serde_json::json!({"status": "unhealthy"})),
+                )
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, sick).await });
+        let err = probe(&format!("http://127.0.0.1:{port}"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("http://127.0.0.1:{port}/health answered 503 (unhealthy)")
+        );
     }
 }

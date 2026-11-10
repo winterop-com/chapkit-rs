@@ -19,8 +19,8 @@ Created Dengue recent in dengue-recent
 
   cd dengue-recent
   cargo test                  # the model's tests
-  cargo run --release         # serve on http://127.0.0.1:8000
-  chapkit-rs test             # in another terminal: chap-core's flow against it
+  cargo run --release -- serve  # serve on http://127.0.0.1:8000
+  cargo run --release -- test   # in another terminal: chap-core's flow against it
 
 The calculation to replace with your model is in src/model.rs.
 ```
@@ -42,7 +42,7 @@ generated data.
 ## 3. Serve it
 
 ```sh
-cargo run --release
+cargo run --release -- serve
 ```
 
 The service listens on <http://127.0.0.1:8000>, with interactive API documentation at
@@ -57,7 +57,7 @@ chapkit-rs test
 ```
 
 ```text
-chapkit-rs test -> http://127.0.0.1:8000
+Testing http://127.0.0.1:8000
 
 Random seed 114429000 (repeat this run with --seed 114429000)
 
@@ -79,7 +79,8 @@ Every step chap-core takes with a model service passed: the package is a working
 its own data, shaped by what the service says it needs, built a configuration from the service's schema, had
 each request checked by `$validate` first, and checked the forecast that came back. Try `--configs 2
 --trainings 2 --predictions 2` for more, or `-v` for details; `chapkit-rs test --start-service` builds and starts
-the package itself.
+the package itself. The package's own binary runs the same test, `cargo run --release -- test`, against the
+service on `--host`/`--port`.
 
 ## 5. Look at what it stored
 
@@ -118,8 +119,8 @@ After each change, `cargo test`, restart the service, and `chapkit-rs test` agai
 
 ## If something goes wrong
 
-- **`Connection refused`** from `chapkit-rs test`: the service is not running, or on another port; pass
-  `--url http://127.0.0.1:PORT`.
+- **`no service at http://127.0.0.1:8000`** from the test: the service is not running, or on another port; pass
+  `--url http://127.0.0.1:PORT` (or `--port PORT` to the package's own `test`).
 - **A step fails**: the line says which and why, for example a forecast with the wrong number of rows. The
   service's terminal shows its log.
 

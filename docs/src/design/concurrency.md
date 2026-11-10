@@ -6,7 +6,7 @@
 | jobs (`$train`, `$predict`, `$backtest`, `$hpo`) | queued behind a semaphore, one at a time by default (`CHAPKIT_MAX_CONCURRENCY`), as in chapkit; the model runs on tokio's blocking pool so it never stalls request handling or health checks |
 | `$predict-sync`, `$explain` | no job; bounded by a second semaphore, one per core by default (`CHAPKIT_SYNC_CONCURRENCY`), so a burst cannot start more CPU-bound work than there are cores |
 | models | `&self` methods on a `Send + Sync` type; trained state is shared behind an `Arc` and read with no lock during a call |
-| explainers | perturbations are evaluated in parallel with rayon, across all cores |
+| explainers | perturbations are evaluated in parallel with rayon, across all cores, unless the batch is cheaper on one thread ([Explainers](explainers.md)) |
 | backtests, searches | inside one job, trainings, splits and search trials run in parallel with rayon, across all cores |
 | store | one SQLite connection behind a mutex on the blocking pool; writes are small metadata rows |
 | warm model cache | an LRU of trained models by artifact id, behind a mutex held only for the lookup |

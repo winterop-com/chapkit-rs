@@ -1,8 +1,9 @@
 # Roadmap
 
 Done: the model contract, safetensors checkpoints with provenance, the full chapkit HTTP API (38 of 38
-routes), eager job completion, `$predict-sync`, `$explain` (LIME, KernelSHAP), the sample data generator,
-the committed OpenAPI document with a Python comparison, and chap-core end-to-end runs with identical scores.
+routes), eager job completion, `$predict-sync`, `$explain` (LIME, KernelSHAP; over the cell's covariates,
+their earlier values and the target's history, with the surrogate's R2), the sample data generator, the
+committed OpenAPI document with a Python comparison, and chap-core end-to-end runs with identical scores.
 
 Also done: the turso storage backend (feature `turso`), passing the same store suite and HTTP contract; a
 shared container image for model packages (published to GHCR, run as managed models in chap-devops); a
@@ -36,8 +37,6 @@ Next:
   Built with [sokkel-ui](https://github.com/winterop-com/sokkel-ui) (React components on Base UI, with charts
   and maps), served by the model binary; a component it lacks is added to sokkel-ui, not built in the app.
 
-- **Lagged explainer features**: perturb covariates at `t-1`, `t-2` from the historic frame
-  ([Explainers](../design/explainers.md)).
 - **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
   the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by
   seed; `<bin> hpo` and the `$hpo` job endpoint, which can create the best config. About 2000 trials per

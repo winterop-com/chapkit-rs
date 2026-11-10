@@ -156,6 +156,13 @@ pub struct ExplainRequest {
     pub time_period: String,
     /// Covariates to explain (default: every numeric covariate in `future`).
     pub features: Option<Vec<String>>,
+    /// `temporal` (default): the cell's covariates, their earlier values and the target's
+    /// history; `row`: the cell's covariates only.
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub scope: Option<chapkit_xai::Scope>,
+    /// Historic periods perturbed under `temporal`. Default 3, at most 52.
+    pub lags: Option<usize>,
     /// `lime` (default) or `shap`.
     #[serde(default)]
     #[schema(value_type = String)]

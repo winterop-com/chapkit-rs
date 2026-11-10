@@ -1117,7 +1117,7 @@
         "tags": [
           "ML"
         ],
-        "summary": "Explain one forecast cell with LIME or KernelSHAP, computed in-process: every\nperturbation is a direct model call, run in parallel across cores.\nchapkit-rs extension; not part of Python chapkit.",
+        "summary": "Explain one forecast cell with LIME or KernelSHAP, computed in-process: every\nperturbation is a direct model call, run in parallel across cores when that is faster.\nFeatures are the cell's covariates, their earlier values and the target's history.\nchapkit-rs extension; not part of Python chapkit.",
         "operationId": "explain",
         "requestBody": {
           "content": {
@@ -2035,6 +2035,14 @@
             ],
             "format": "double"
           },
+          "lags": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Historic periods perturbed under `temporal`. Default 3, at most 52.",
+            "minimum": 0
+          },
           "location": {
             "type": "string",
             "description": "Location of the cell to explain."
@@ -2060,6 +2068,13 @@
                 "type": "null"
               }
             ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`temporal` (default): the cell's covariates, their earlier values and the target's\nhistory; `row`: the cell's covariates only."
           },
           "seed": {
             "type": [

@@ -2,12 +2,13 @@
 //!
 //! Perturbations are drawn from a normal with the background's per-feature mean and
 //! spread; the surrogate is fit on standardized features, so a coefficient is the
-//! change in prediction per standard deviation of that feature.
+//! change in prediction per standard deviation of that feature. The result carries the
+//! surrogate's weighted R2 and the kernel's effective sample size.
 
 use crate::linalg::weighted_least_squares;
 use crate::{
-    Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn, eval_batch,
-    feature_stats,
+    Background, Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn,
+    eval_batch, weighted_r2,
 };
 use chapkit_core::rng::Rng;
 
@@ -15,11 +16,11 @@ pub(crate) fn explain(
     f: &dyn ValueFn,
     features: &[String],
     instance: &[f64],
-    background: &[Vec<f64>],
+    background: &Background,
     opts: &Options,
 ) -> Result<Explanation> {
     let k = features.len();
-    let (mu, sigma) = feature_stats(k, background);
+    let (mu, sigma) = (&background.mean, &background.sd);
     let width = opts
         .kernel_width
         .unwrap_or((k as f64).sqrt() * 0.75)
@@ -43,8 +44,14 @@ pub(crate) fn explain(
         points.push(x);
     }
 
-    let values = eval_batch(f, &points)?;
+    let values = eval_batch(f, &points, opts.parallel)?;
     let coef = weighted_least_squares(&design, &values, &weights).ok_or(Error::Singular("LIME"))?;
+    let fitted: Vec<f64> = design
+        .iter()
+        .map(|row| row.iter().zip(&coef).map(|(x, c)| x * c).sum())
+        .collect();
+    let sum_w: f64 = weights.iter().sum();
+    let sum_w2: f64 = weights.iter().map(|w| w * w).sum();
     Ok(Explanation {
         method: Method::Lime,
         prediction: values.first().copied().unwrap_or(f64::NAN),
@@ -58,6 +65,8 @@ pub(crate) fn explain(
                 weight: *w,
             })
             .collect(),
+        r2: weighted_r2(&values, &fitted, &weights),
+        effective_n: Some(sum_w * sum_w / sum_w2),
         n_model_calls: points.len(),
     })
 }

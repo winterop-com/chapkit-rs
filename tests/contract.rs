@@ -325,8 +325,30 @@ async fn chap_core_flow() {
     assert_eq!(s, StatusCode::OK, "{ex}");
     assert_eq!(ex["method"], "shap");
     assert_eq!(ex["prediction"], 10.0);
-    assert_eq!(ex["features"], json!(["rainfall"]));
-    assert_eq!(ex["importances"][0]["weight"], 0.0);
+    assert_eq!(
+        ex["features"],
+        json!([
+            "rainfall",
+            "rainfall@t-1",
+            "disease_cases@t-1",
+            "rainfall@t-2",
+            "disease_cases@t-2",
+            "rainfall@t-3",
+            "disease_cases@t-3"
+        ])
+    );
+    assert!(
+        ex["importances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["weight"] == 0.0),
+        "{ex}"
+    );
+    assert!(
+        ex.get("r2").is_none(),
+        "a constant forecast has no R2: {ex}"
+    );
     assert!(ex["elapsed_ms"].as_f64().unwrap() >= 0.0);
 
     // Sample data generator, as cdx and the console use it.
@@ -534,6 +556,95 @@ async fn failed_jobs_and_problem_responses() {
     ] {
         assert!(doc["paths"].get(path).is_some(), "openapi missing {path}");
     }
+}
+
+/// Forecasts the location's last observed case count plus the step's rainfall, so it reads
+/// `historic` as well as `future`.
+struct LastCasesModel;
+
+impl Model for LastCasesModel {
+    type Config = MeanConfig;
+    type Trained = f64;
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &MeanConfig, _: TrainInput<'_>) -> ModelResult<f64> {
+        Ok(1.0)
+    }
+
+    fn predict(&self, _: &f64, _: &MeanConfig, input: PredictInput<'_>) -> ModelResult<DataFrame> {
+        let cases = input.historic.f64_column(cols::DISEASE_CASES)?;
+        let hist_loc = input.historic.require(cols::LOCATION)?;
+        let last: HashMap<String, f64> = (0..input.historic.n_rows())
+            .filter_map(|r| Some((hist_loc.str_at(r)?.to_owned(), *cases.get(r)?)))
+            .collect();
+        let rain = input.future.f64_column("rainfall")?;
+        let loc = input.future.require(cols::LOCATION)?;
+        prediction_frame(input.future, 4, |row, out| {
+            let base = loc.str_at(row).and_then(|l| last.get(l)).copied();
+            out.fill(base.unwrap_or(0.0) + rain.get(row).copied().unwrap_or(0.0));
+            Ok(())
+        })
+    }
+}
+
+/// `$explain` perturbs the cell's covariates, their earlier values and the target's history
+/// (`scope`, `lags`), and reports the surrogate's fit (`r2`, `effective_n`).
+#[tokio::test]
+async fn explain_temporal_features() {
+    let app = chapkit::Service::new("lag", "Lag", LastCasesModel)
+        .database(":memory:")
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let fx = fixture();
+    let (_, sub) = train_model(&app, &fx["train"]).await;
+    let body = |extra: Value| {
+        let mut b = json!({"artifact_id": sub["artifact_id"], "historic": fx["historic"],
+            "future": fx["future"], "location": "A"});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        b
+    };
+    let explain = |b: Value| {
+        let app = app.clone();
+        async move { call(&app, "POST", "/api/v1/ml/$explain", Some(b)).await }
+    };
+
+    // Default: temporal scope, three historic lags. The forecast follows the last observed
+    // count one for one; historic counts are 10 (A) and 20 (B), so one SD is 5.
+    let (s, ex, _) = explain(body(json!({"time_period": "2025-01"}))).await;
+    assert_eq!(s, StatusCode::OK, "{ex}");
+    assert_eq!(ex["features"].as_array().unwrap().len(), 7, "{ex}");
+    assert_eq!(ex["importances"][0]["feature"], "disease_cases@t-1");
+    assert!((ex["importances"][0]["weight"].as_f64().unwrap() - 5.0).abs() < 1e-6);
+    assert!((ex["r2"].as_f64().unwrap() - 1.0).abs() < 1e-9, "{ex}");
+    let n_eff = ex["effective_n"].as_f64().unwrap();
+    assert!(n_eff > 1.0 && n_eff <= 500.0, "{ex}");
+
+    // Earlier forecast steps are features too; lags 0 leaves history out.
+    let (_, ex, _) = explain(body(json!({"time_period": "2025-03", "lags": 0}))).await;
+    assert_eq!(
+        ex["features"],
+        json!(["rainfall", "rainfall@t-1", "rainfall@t-2"])
+    );
+
+    // Row scope: only the cell's own covariates, as before.
+    let (_, ex, _) = explain(body(json!({"time_period": "2025-03", "scope": "row"}))).await;
+    assert_eq!(ex["features"], json!(["rainfall"]));
+
+    // SHAP over the same features reports its additive fit, no effective N.
+    let (_, ex, _) = explain(body(json!({"time_period": "2025-01", "method": "shap"}))).await;
+    assert!((ex["r2"].as_f64().unwrap() - 1.0).abs() < 1e-9, "{ex}");
+    assert!(ex.get("effective_n").is_none());
+
+    let (s, _, _) = explain(body(json!({"time_period": "2025-01", "scope": "lagged"}))).await;
+    assert!(s.is_client_error(), "{s}");
 }
 
 /// Needs geo to predict: fails without it, like a model with spatial smoothing.

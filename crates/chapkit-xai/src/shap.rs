@@ -5,14 +5,15 @@
 //! SHAP-kernel-weighted regression is solved under the efficiency constraint
 //! `sum(phi) = f(x) - f(reference)`, enforced by eliminating the last coefficient.
 //! Up to 12 features every coalition is enumerated; above that they are
-//! importance-sampled with probability proportional to the kernel.
+//! importance-sampled with probability proportional to the kernel. `r2` is the weighted fit of
+//! the coalition values by sums of their features' contributions: 1 for an additive model.
 
 use std::collections::BTreeMap;
 
 use crate::linalg::weighted_least_squares;
 use crate::{
-    Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn, eval_batch,
-    feature_stats,
+    Background, Error, Explanation, FeatureImportance, Method, Options, Result, ValueFn,
+    eval_batch, weighted_r2,
 };
 use chapkit_core::rng::Rng;
 
@@ -22,11 +23,11 @@ pub(crate) fn explain(
     f: &dyn ValueFn,
     features: &[String],
     instance: &[f64],
-    background: &[Vec<f64>],
+    background: &Background,
     opts: &Options,
 ) -> Result<Explanation> {
     let k = features.len();
-    let (reference, _) = feature_stats(k, background);
+    let reference = background.mean.clone();
     let coalitions = coalitions(k, opts.n_samples, opts.seed);
 
     let mut points = vec![instance.to_vec(), reference.clone()];
@@ -37,7 +38,7 @@ pub(crate) fn explain(
                 .collect(),
         );
     }
-    let values = eval_batch(f, &points)?;
+    let values = eval_batch(f, &points, opts.parallel)?;
     let (f_x, f_ref) = (values[0], values[1]);
     let total = f_x - f_ref;
 
@@ -61,6 +62,20 @@ pub(crate) fn explain(
     };
     phi.push(total - phi.iter().sum::<f64>());
 
+    // How additive the model is here: the coalition values against the sum of their phis.
+    let (mut actual, mut fitted, mut cw) = (Vec::new(), Vec::new(), Vec::new());
+    for ((z, weight), fz) in coalitions.iter().zip(&values[2..]) {
+        actual.push(fz - f_ref);
+        fitted.push(
+            z.iter()
+                .zip(&phi)
+                .filter(|(b, _)| **b)
+                .map(|(_, p)| p)
+                .sum(),
+        );
+        cw.push(*weight);
+    }
+
     Ok(Explanation {
         method: Method::Shap,
         prediction: f_x,
@@ -74,6 +89,8 @@ pub(crate) fn explain(
                 weight: *w,
             })
             .collect(),
+        r2: weighted_r2(&actual, &fitted, &cw),
+        effective_n: None,
         n_model_calls: points.len(),
     })
 }

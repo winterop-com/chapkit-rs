@@ -125,7 +125,8 @@ async fn predict_sync(
 }
 
 /// Explain one forecast cell with LIME or KernelSHAP, computed in-process: every
-/// perturbation is a direct model call, run in parallel across cores.
+/// perturbation is a direct model call, run in parallel across cores when that is faster.
+/// Features are the cell's covariates, their earlier values and the target's history.
 /// chapkit-rs extension; not part of Python chapkit.
 #[utoipa::path(post, path = "/$explain", tag = "ML", request_body = ExplainRequest,
     responses((status = OK, body = ExplainResponse), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
@@ -159,6 +160,12 @@ async fn explain(
         n_samples: req.n_samples.unwrap_or(500).clamp(1, 100_000),
         seed: req.seed.unwrap_or(0),
         kernel_width: req.kernel_width,
+        parallel: chapkit_xai::Parallel::Auto,
+    };
+    let spec = chapkit_xai::FeatureSpec {
+        covariates: req.features,
+        scope: req.scope.unwrap_or_default(),
+        lags: req.lags.unwrap_or(chapkit_xai::DEFAULT_LAGS).min(52),
     };
     let target = chapkit_xai::ForecastTarget {
         location: req.location,
@@ -166,12 +173,12 @@ async fn explain(
     };
     let start = std::time::Instant::now();
     let result = tokio::task::spawn_blocking(move || {
-        let predict = |future: &DataFrame| {
+        let predict = |historic: &DataFrame, future: &DataFrame| {
             model
                 .predict(
                     &trained,
                     &config,
-                    chapkit_core::PredictInput::new(&req.historic, future, &run, req.geo.as_ref()),
+                    chapkit_core::PredictInput::new(historic, future, &run, req.geo.as_ref()),
                 )
                 .map_err(|e| e.to_string())
         };
@@ -180,7 +187,7 @@ async fn explain(
             &req.historic,
             &req.future,
             &target,
-            req.features,
+            &spec,
             &target_col,
             &opts,
         )

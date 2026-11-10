@@ -31,6 +31,8 @@ Next:
   the backtests make possible: a dataset, a backtest, scores by horizon and location, forecasts against the
   truth, skill against the baselines, explanations and search trials. For one model and its developer; the
   Modeling App remains the tool for comparing models across a country.
+  Built with [sokkel-ui](https://github.com/winterop-com/sokkel-ui) (React components on Base UI, with charts
+  and maps), served by the model binary; a component it lacks is added to sokkel-ui, not built in the app.
 
 - **Lagged explainer features**: perturb covariates at `t-1`, `t-2` from the historic frame
   ([Explainers](../design/explainers.md)).

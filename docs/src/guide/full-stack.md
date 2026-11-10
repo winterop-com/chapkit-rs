@@ -1,11 +1,11 @@
 # Full stack: chap-core, DHIS2, Modeling App
 
-You run the Rust models the way a Chap deployment runs them: chap-core (latest `master`), DHIS2 with demo data, and
+You run the chapkit-rs models (the baseline ports from chapkit-rs-models) the way a Chap deployment runs them: chap-core (latest `master`), DHIS2 with demo data, and
 the Modeling App inside DHIS2, with the models registered as services. Then you evaluate and forecast with them
 through the Modeling App, next to a Python chapkit model and chap-core's own built-in baselines.
 
 This page is also the runbook for testing chapkit-rs against the full stack: each step says what it printed when
-it was last run (2026-11-10, chap-core `2.7.0.dev0` from `master`, DHIS2 2.42.7.1, Modeling App 7.4.0).
+it was last run (2026-11-10, chap-core 2.7.0 from `master`, DHIS2 2.42.7.1, Modeling App 7.4.0).
 [Findings](#findings) lists what the run turned up.
 
 `cdx` below is short for `chap-devops`; make it with `alias cdx=chap-devops` (or a symlink named `cdx` on your
@@ -72,14 +72,20 @@ for timing.
 
 ## 3. Add the chapkit-rs models
 
-Each model image is added with the service id the binary registers under (`global-median`, ...):
+Each model image is added with the service id the binary registers under (`global-median`, ...). Persistence
+registers as `persistence-crs`, since `persistence` is the name of chap-core's own built-in. The images are not in
+the marketplace, so `cdx models add` asks for confirmation; `--yes` gives it:
 
 ```sh
 for m in global-median seasonal-median seasonal-shift-persistence; do
-  cdx models add ghcr.io/winterop-com/chapkit-rs-models/baseline-$m:latest --service-id $m
+  cdx models add ghcr.io/winterop-com/chapkit-rs-models/baseline-$m:latest --service-id $m --yes
 done
+cdx models add ghcr.io/winterop-com/chapkit-rs-models/baseline-persistence:latest --service-id persistence-crs --yes
 cdx up --wait
 ```
+
+The Python reference model runs emulated on Apple Silicon and costs the most memory of the model services;
+`cdx models disable chapkit_simple_multistep_model` switches it off when it is not needed (its volume is kept).
 
 `cdx models add` names each model after its image (`baseline_global_median`, ...). `cdx up --wait` returns when
 every model has registered with chap-core, and creates a configured model for each, which chap-core needs before
@@ -126,18 +132,21 @@ To see them:
 cdx api GET /v1/crud/model-templates
 ```
 
-| template | display name | author | status | period type |
-|---|---|---|---|---|
-| `global-median` (chapkit-rs) | Global median | Morten Hansen | green | any |
-| `global_median` (chap-core built-in) | Global median | CHAP team | red | any |
-| `seasonal-median` (chapkit-rs) | Seasonal median | Morten Hansen | green | any |
-| `seasonal_median` (built-in) | Seasonal median | CHAP team | red | any |
-| `seasonal-shift-persistence` (chapkit-rs) | Seasonal shift persistence | Morten Hansen | green | any |
-| `seasonal_shift_persistence` (built-in) | Seasonal shift persistence | CHAP team | red | any |
-| `chapkit-simple-multistep-model` (Python chapkit) | Simple Multistep Model (chapkit) | CHAP team | orange | month |
+| template | version | display name | author | status | period type |
+|---|---|---|---|---|---|
+| `global-median` (chapkit-rs) | 1.0.2 | Global median (crs) | Morten Hansen | red | any |
+| `global_median` (chap-core built-in) | 2 | Global median | CHAP team | red | any |
+| `seasonal-median` (chapkit-rs) | 1.0.2 | Seasonal median (crs) | Morten Hansen | red | any |
+| `seasonal_median` (built-in) | 2 | Seasonal median | CHAP team | red | any |
+| `seasonal-shift-persistence` (chapkit-rs) | 1.0.2 | Seasonal shift persistence (crs) | Morten Hansen | red | any |
+| `seasonal_shift_persistence` (built-in) | 1 | Seasonal shift persistence | CHAP team | red | any |
+| `persistence-crs` (chapkit-rs) | 1.0.2 | Persistence (crs) | Morten Hansen | red | any |
+| `persistence` (built-in) | 2 | Persistence | CHAP team | red | any |
+| `chapkit-simple-multistep-model` (Python chapkit) | 0.1.5 | Simple Multistep Model (chapkit) | CHAP team | orange | month |
 
-chap-core `master` ships all three baselines built in (2.6.0 had only the two medians), so each port can be
-compared with its original through chap-core.
+chap-core 2.7.0 ships all four baselines built in (2.6.0 had only the two medians), so each port can be compared
+with its original through chap-core. (The first run of this page registered the ports with the built-ins' names
+and status green; findings 1 and 2.)
 
 ## 6. Swap in a new build of a model
 
@@ -146,14 +155,15 @@ refuses a new build under an old version, finding 6), publish its images (push t
 them, once per version) and replace the running ones:
 
 ```sh
-for m in global_median seasonal_median seasonal_shift_persistence; do cdx models remove baseline_$m; done
-for m in global-median seasonal-median seasonal-shift-persistence; do
-  cdx models add ghcr.io/winterop-com/chapkit-rs-models/baseline-$m:latest --service-id $m
+for m in global-median seasonal-median seasonal-shift-persistence persistence; do
+  docker pull --platform linux/amd64 ghcr.io/winterop-com/chapkit-rs-models/baseline-$m:latest
 done
 cdx up --wait
 ```
 
-`cdx models remove` retires the model in chap-core and archives its configured models. A locally built image only
+`cdx up` recreates the services from the pulled images; with a new version each registers as a new model template
+and gets a configured model. (`cdx models remove` retires a model in chap-core and archives its configured models;
+it is only needed to drop a model.) A locally built image only
 works if it was built for linux/amd64 (finding 5).
 
 ## 7. Open the Modeling App
@@ -208,7 +218,8 @@ cdx api GET /v1/crud/datasets
 
 **Evaluate**, **New evaluation**, tab **Use saved dataset**:
 
-1. Name it, pick the dataset (the target column comes from the dataset).
+1. Name it after what it compares, such as "Baselines (crs) 1.0.2, Laos districts weekly" (each model's backtest
+   is named `<name>/<service id>`), and pick the dataset (the target column comes from the dataset).
 2. **Select models**: tick the models, then **Use selected models**.
 3. Backtest parameters: for weekly data the defaults became 12 forecast periods, 7 splits, step 4, 1 training run.
 4. Future-weather provider: **Seasonal climatology**.
@@ -222,8 +233,10 @@ backtest job. Follow them with:
 cdx api GET /v1/jobs
 ```
 
-To compare the ports with the built-ins, read the metrics of the backtest specification (one per evaluation); its
-`backtests` are the selected models and its `baselines` the built-ins:
+To compare the ports with the built-ins, read the metrics of the backtest specification; its `backtests` are the
+selected models and its `baselines` the built-ins. An evaluation with the same dataset and backtest parameters as an
+earlier one joins that one's specification, and chap-core reuses the built-ins' results instead of running them
+again:
 
 ```sh
 cdx api GET /v1/crud/backtest-specifications/2
@@ -238,7 +251,23 @@ while :; do
 done
 ```
 
-## 11. Results
+## 11. Run a prediction
+
+A prediction starts from a completed evaluation:
+
+1. **Evaluate**, open a model's backtest (for example ".../global-median"), **Create prediction setup**, give the
+   setup a name ("Global median (crs), Laos districts weekly") and **Save**; the app opens the setup.
+2. **Run prediction**, then pick the **Last training period** (it has no default; the Laos data ends in week 52 of
+   2024: year 2024, then "Week 52") and **Run prediction** again.
+3. The job appears as `create_prediction` in `cdx api GET /v1/jobs`.
+
+Evaluations are renamed in the app (a backtest's **More** menu, **Rename**) or through chap-core's API:
+
+```sh
+cdx api PATCH /v1/crud/backtests/17 --data '{"name": "Baselines (crs) 1.0.2, Laos districts weekly/global-median"}'
+```
+
+## 12. Results
 
 All on an Apple Silicon laptop, with the whole stack emulated as linux/amd64 (finding 5), so the times are only
 comparable with each other.
@@ -251,6 +280,10 @@ comparable with each other.
 | 2: 136 districts weekly, 12 periods, 7 splits | global median | 2.2518619012 | 2.6640580535 | 5.0445017319 | 0.9408081958 |
 | 2 | seasonal median | 4.5017012082 | 5.3167330677 | 10.1044558714 | 0.3918611269 |
 | 2 | seasonal shift persistence | 3.2495319309 | 4.0936462610 | 8.3621875534 | 0.5412635174 |
+| 2 | persistence | 2.5537512713 | 3.0051223677 | 5.3147382626 | 0.8215708594 |
+
+Evaluation 2 ran twice: with the 1.0.0 ports and again with 1.0.2 (persistence added); both runs gave the same
+numbers.
 
 Every metric of every model is identical except one: seasonal shift persistence's `ratio_above_truth` is 0.5116505407
 for the port and 0.5116476949 for the built-in. One sample in about 350,000 that equals the observation exactly in
@@ -266,7 +299,11 @@ Python lands one rounding step above it in Rust (finding 9).
 
 The chapkit-rs services did very little of that time: `$train` took 151 ms and each `$predict` 40-90 ms, JSON decoding
 included, and the first job poll found each job done. The rest is chap-core's worker: 9 s before it posts `$train`
-and about 4 s around each of the 7 predictions (finding 8).
+and about 4 s around each of the 7 predictions (finding 8). With the four ports alone (1.0.2 run, the built-ins
+reused), each backtest took 42 s.
+
+**Prediction.** "Global median (crs), Laos districts weekly prediction" (136 districts, training to 2024W52) took
+14.4 s as a chap-core job; the service's part was `$train` 22 ms, `$predict` 46 ms and reading the result 12 ms.
 
 ## Findings
 
@@ -282,3 +319,5 @@ and about 4 s around each of the 7 predictions (finding 8).
 | 8 | A chapkit model backtest took 47 s against 19 s for a built-in, although the service itself answered in under a second in total: the time is chap-core's REST wrapper (9 s before `$train`, about 4 s per split). This is the overhead the in-process fast paths avoid; it is on chap-core's side. | chap-core | open |
 | 9 | Seasonal shift persistence differs from the built-in in the last bit of some samples (at most 3.5e-16), enough to flip one tie with the observation in about 350,000 samples (`ratio_above_truth` off by 2.8e-6). | chapkit-rs-models | open: match Python's operation order |
 | 10 | District "0710 Xon" has no geometry in the demo database, which blocks district datasets (step 8). | DHIS2 demo data | worked around |
+| 11 | Running a prediction needs a **Last training period**, which has no default although the setup knows where its data ends; the picker opens on the current year, two years after the data. | Modeling App | noted |
+| 12 | `chap-devops down` in one deployment folder only stops that deployment, but another session running `chap-devops up`/`down` in the same folder takes it down mid-run: the deployment folder is shared state. Once, every container on the machine disappeared at once (images and volumes kept); nothing in chap-devops matched it, and a Docker Desktop restart fits. | local setup | noted |

@@ -60,7 +60,7 @@ export function bytes(size: number | null | undefined): string {
 
 /** A period type for a reader. */
 export const periodWord = (type: string | null | undefined) =>
-    ({ month: 'Monthly', week: 'Weekly', day: 'Daily', year: 'Yearly', any: 'Any' })[type ?? ''] ?? type ?? '-'
+    ({ month: 'Monthly', monthly: 'Monthly', week: 'Weekly', weekly: 'Weekly', day: 'Daily', year: 'Yearly', any: 'Any' })[type ?? ''] ?? type ?? '-'
 
 /** A short id: the last characters of a ULID, which differ between ids made close together. */
 export const shortId = (id: string) => id.slice(-8)

@@ -32,6 +32,7 @@ interactive docs at `/docs`. Routes marked chapkit-rs only are extensions Python
 | `POST` | `/api/v1/configs/{id}/$unlink-artifact` | Unlink an artifact from the config. |
 | `GET` | `/api/v1/datasets` | List datasets (paged when both `page` and `size` are given). |
 | `POST` | `/api/v1/datasets` | Store a dataset: JSON `{name, data, target?}`, or a CSV or JSON `file` (with `name` and |
+| `POST` | `/api/v1/datasets/$generate` | Store a dataset made by the sample-data generator: the training data |
 | `GET` | `/api/v1/datasets/{id}` | Get a dataset's description. |
 | `DELETE` | `/api/v1/datasets/{id}` | Delete a dataset. |
 | `GET` | `/api/v1/datasets/{id}/$data` | The dataset as stored, chapkit DataFrame JSON; with `location` (repeatable), only those |

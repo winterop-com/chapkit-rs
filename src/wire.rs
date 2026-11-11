@@ -368,6 +368,43 @@ pub struct DatasetMeta {
     pub columns: Vec<String>,
     /// Numeric columns other than the target, `time_period` and `location`.
     pub covariates: Vec<String>,
+    /// How a generated dataset was made (`POST /api/v1/datasets/$generate`); absent for uploads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<GeneratorSettings>,
+}
+
+/// `POST /api/v1/datasets/$generate`: a stored dataset from the sample-data generator, the
+/// training data `GET /api/v1/ml/$generate-sample-data` gives for the same parameters.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct DatasetGenerate {
+    pub name: String,
+    /// Include this config's `additional_continuous_covariates`.
+    pub config_id: Option<String>,
+    /// Locations (default 5).
+    pub num_locations: Option<usize>,
+    /// Periods (default 50).
+    pub num_periods: Option<usize>,
+    /// Generic `feature_N` covariates (default 3).
+    pub num_features: Option<usize>,
+    /// `monthly` or `weekly` (default: the model's period type, else monthly).
+    pub period_type: Option<String>,
+    /// Negative or absent: a random seed, recorded in the dataset.
+    pub seed: Option<i64>,
+}
+
+/// The generator settings a dataset was made with, as resolved; the same settings make the same
+/// dataset again.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct GeneratorSettings {
+    pub num_locations: usize,
+    pub num_periods: usize,
+    pub num_features: usize,
+    /// `monthly` or `weekly`.
+    pub period_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_id: Option<String>,
+    /// The seed used (drawn at random when none was given).
+    pub seed: i64,
 }
 
 /// A stored dataset.

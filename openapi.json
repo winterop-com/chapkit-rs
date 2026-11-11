@@ -1022,6 +1022,63 @@
         }
       }
     },
+    "/api/v1/datasets/$generate": {
+      "post": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Store a dataset made by the sample-data generator: the training data\n`GET /api/v1/ml/$generate-sample-data` gives for the same parameters (no geo: stored datasets\nhold a table only), with `disease_cases` as the target. Without a seed (or with a negative one)\na random seed is drawn; the settings and the seed are kept in `generator`, so the same dataset\ncan be made again.",
+        "operationId": "generate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetGenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/datasets/{id}": {
       "get": {
         "tags": [
@@ -2423,6 +2480,64 @@
           }
         }
       },
+      "DatasetGenerate": {
+        "type": "object",
+        "description": "`POST /api/v1/datasets/$generate`: a stored dataset from the sample-data generator, the\ntraining data `GET /api/v1/ml/$generate-sample-data` gives for the same parameters.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "config_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Include this config's `additional_continuous_covariates`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "num_features": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Generic `feature_N` covariates (default 3).",
+            "minimum": 0
+          },
+          "num_locations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Locations (default 5).",
+            "minimum": 0
+          },
+          "num_periods": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Periods (default 50).",
+            "minimum": 0
+          },
+          "period_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`monthly` or `weekly` (default: the model's period type, else monthly)."
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Negative or absent: a random seed, recorded in the dataset."
+          }
+        }
+      },
       "DatasetIn": {
         "type": "object",
         "description": "`POST /api/v1/datasets` as JSON.",
@@ -2480,6 +2595,17 @@
           "first_period": {
             "type": "string",
             "description": "First period, as chapkit writes it (`2024-01`, `2024W01`)."
+          },
+          "generator": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GeneratorSettings",
+                "description": "How a generated dataset was made (`POST /api/v1/datasets/$generate`); absent for uploads."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "last_period": {
             "type": "string",
@@ -2767,6 +2893,46 @@
               "null"
             ],
             "description": "Future weather: `climatology` (default), `damped_persistence` or `mstl_arima`."
+          }
+        }
+      },
+      "GeneratorSettings": {
+        "type": "object",
+        "description": "The generator settings a dataset was made with, as resolved; the same settings make the same\ndataset again.",
+        "required": [
+          "num_locations",
+          "num_periods",
+          "num_features",
+          "period_type",
+          "seed"
+        ],
+        "properties": {
+          "config_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "num_features": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "num_locations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "num_periods": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "period_type": {
+            "type": "string",
+            "description": "`monthly` or `weekly`."
+          },
+          "seed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The seed used (drawn at random when none was given)."
           }
         }
       },

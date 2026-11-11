@@ -43,16 +43,11 @@ Next:
   against the truth), forecasts (`$forecast` past the end of the data), configs, jobs, artifacts, system and API
   pages. Released without a design review; 0.6.0 reviews it with the user and fixes what that finds.
 
-- **Generated datasets**: make a stored dataset from the sample-data generator instead of uploading one, so a
-  model can be tried, evaluated and forecast straight away. The generator is chapkit's own: Python chapkit
-  serves it as `GET /api/v1/ml/$generate-sample-data` (its `TestDataGenerator`), and chapkit-rs serves the same
-  endpoint with the same parameters from `chapkit::synth` ([guide](../guide/sample-data.md)). What is missing is
-  keeping its output as a stored dataset (stored datasets are chapkit-rs' own, for the UI): a
-  `POST /api/v1/datasets/$generate` with a name and exactly `$generate-sample-data`'s parameters
-  (`num_locations`, `num_periods`, `num_features`, `period_type`, `config_id`, `seed`, ...), whose data is what
-  that endpoint returns for them, under the same cell limit; no second set of generator settings. In the UI, a
-  "Generate" choice beside Upload on the Datasets page (and in the command palette), with the seed shown so a
-  dataset can be made again.
+- **Generated datasets** ([guide](../guide/sample-data.md#as-a-stored-dataset)). Done:
+  `POST /api/v1/datasets/$generate` stores what `GET /api/v1/ml/$generate-sample-data` gives for the same
+  parameters (the same code path and cell limit), with the settings and the seed in the dataset's
+  `generator`; in the UI, Generate beside Upload on the Datasets page and in the palette, and a generated
+  dataset's page shows the settings and the seed, with Generate again.
 
 - **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
   the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by

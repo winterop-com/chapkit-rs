@@ -10,6 +10,7 @@ import type {
     Forecast,
     ForecastSummary,
     Frame,
+    GenerateRequest,
     Health,
     Info,
     Job,
@@ -231,6 +232,8 @@ export const api = {
         form.append('file', file)
         return request<Dataset>(`${BASE}/datasets`, { method: 'POST', body: form })
     },
+    /** A dataset made by the sample-data generator. */
+    generateDataset: (body: GenerateRequest) => request<Dataset>(`${BASE}/datasets/$generate`, json('POST', body)),
     deleteDataset: (id: string) => request<void>(`${BASE}/datasets/${id}`, { method: 'DELETE' }),
 
     backtest: (body: BacktestRequest) => request<JobSubmitted>(`${BASE}/ml/$backtest`, json('POST', body)),

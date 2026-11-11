@@ -14,9 +14,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { Frame } from '../api/types'
 import { count, periodWord, when } from '../lib/format'
+import { sampleDataPath } from '../lib/generate'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
 import { LocationPicker } from '../parts'
+import { GenerateDialog } from './GenerateDialog'
 
 type Row = Record<string, string | number | null> & { _key: string }
 
@@ -56,6 +58,7 @@ export function DatasetPage({ id }: { id: string }) {
     const meta = dataset.data
     const [chosen, setChosen] = useState<string[]>([])
     const [removing, setRemoving] = useState(false)
+    const [regenerating, setRegenerating] = useState(false)
     useEffect(() => {
         if (meta !== undefined && chosen.length === 0) setChosen(meta.location_ids.slice(0, 3))
         // Only the first locations, once the dataset has come.
@@ -97,14 +100,14 @@ export function DatasetPage({ id }: { id: string }) {
         )
 
     return (
-        <PageState loading={dataset.loading} error={dataset.error?.detail ?? dataset.error?.message} status={dataset.error?.status} onRetry={dataset.reload}>
+        <PageState loading={dataset.loading} error={dataset.error?.detail ?? dataset.error?.message} status={dataset.error?.status} onRetry={dataset.reload} headingLevel="h1">
             {meta && (
                 <div className="flex flex-col gap-6">
                     <PageHeader
                         title={meta.name}
                         code={meta.id}
                         onBack={() => go('/datasets')}
-                        meta={`Uploaded ${when(meta.created_at)}`}
+                        meta={`${meta.generator ? 'Generated' : 'Uploaded'} ${when(meta.created_at)}`}
                         actions={
                             <>
                                 <Button variant="outline" size="sm" onClick={() => setRemoving(true)}>
@@ -134,6 +137,30 @@ export function DatasetPage({ id }: { id: string }) {
                             ]}
                         />
                     </Section>
+                    {meta.generator && (
+                        <Section
+                            title="Generator"
+                            description="Made by the sample-data generator. The same settings and seed make the same data again."
+                            actions={
+                                <Button variant="outline" size="sm" onClick={() => setRegenerating(true)}>
+                                    Generate again
+                                </Button>
+                            }
+                        >
+                            <DescriptionList
+                                columns={2}
+                                items={[
+                                    { term: 'Seed', value: String(meta.generator.seed), code: true },
+                                    { term: 'Period type', value: periodWord(meta.generator.period_type) },
+                                    { term: 'Locations', value: count(meta.generator.num_locations), numeric: true },
+                                    { term: 'Periods', value: count(meta.generator.num_periods), numeric: true },
+                                    { term: 'Features', value: count(meta.generator.num_features), numeric: true },
+                                    { term: 'Config', value: meta.generator.config_id ?? 'None', code: meta.generator.config_id !== undefined },
+                                    { term: 'Same data from', value: sampleDataPath(meta.generator), code: true, wide: true },
+                                ]}
+                            />
+                        </Section>
+                    )}
                     <ChartFrame
                         bodyClassName="h-72"
                         title={`${target} over time`}
@@ -164,6 +191,9 @@ export function DatasetPage({ id }: { id: string }) {
                             empty={frames.error ? `Could not read the rows: ${frames.error.message}` : 'Choose a location to see its rows.'}
                         />
                     </Section>
+                    {regenerating && meta.generator && (
+                        <GenerateDialog open onOpenChange={setRegenerating} settings={meta.generator} onGenerated={(made) => go(`/datasets/${made.id}`)} />
+                    )}
                     <ConfirmDialog
                         open={removing}
                         onOpenChange={setRemoving}

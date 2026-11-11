@@ -506,23 +506,23 @@ async fn hpo(
 /// The most cells (rows times columns) `$generate-sample-data` makes, about 200 MB of JSON.
 const MAX_SAMPLE_CELLS: usize = 20_000_000;
 
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
-struct SampleParams {
+#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+pub(crate) struct SampleParams {
     /// `train` (default) or `predict`.
-    kind: Option<String>,
+    pub(crate) kind: Option<String>,
     /// Include this config's `additional_continuous_covariates`.
-    config_id: Option<String>,
-    num_locations: Option<usize>,
-    num_periods: Option<usize>,
-    num_features: Option<usize>,
+    pub(crate) config_id: Option<String>,
+    pub(crate) num_locations: Option<usize>,
+    pub(crate) num_periods: Option<usize>,
+    pub(crate) num_features: Option<usize>,
     /// `monthly` or `weekly` (default: the model's period type, else monthly).
-    period_type: Option<String>,
+    pub(crate) period_type: Option<String>,
     /// `polygon` (default) or `point`.
-    geo_type: Option<String>,
+    pub(crate) geo_type: Option<String>,
     /// Default: whether the model requires geo.
-    include_geo: Option<bool>,
+    pub(crate) include_geo: Option<bool>,
     /// Negative (default) for fresh data each call.
-    seed: Option<i64>,
+    pub(crate) seed: Option<i64>,
 }
 
 /// The `additional_continuous_covariates` of stored config `cid`.
@@ -546,6 +546,142 @@ async fn config_covariates(s: &AppState, cid: &str) -> ApiResult<Vec<String>> {
         .unwrap_or_default())
 }
 
+/// A checked `$generate-sample-data` request, within the cell limit.
+pub(crate) struct Sample {
+    pub(crate) spec: chapkit_core::synth::Spec,
+    /// `train` or `predict`.
+    kind: String,
+    /// Historic periods (`spec.num_periods` is the future's under `predict`).
+    pub(crate) num_periods: usize,
+    pub(crate) seed: Option<u64>,
+    pub(crate) config_id: Option<String>,
+    /// A grid, `Some(true)` of points.
+    geo: Option<bool>,
+}
+
+impl Sample {
+    /// Resolve the parameters against the model and the config, as `$generate-sample-data` does.
+    pub(crate) async fn new(s: &AppState, p: SampleParams) -> ApiResult<Self> {
+        use chapkit_core::synth::{Resolution, Spec};
+        let info = s.model().info();
+        let config_covariates = match &p.config_id {
+            Some(cid) => config_covariates(s, cid).await?,
+            None => Vec::new(),
+        };
+        let resolution = match p.period_type.as_deref() {
+            Some("weekly") => Resolution::Weekly,
+            Some("monthly") => Resolution::Monthly,
+            Some(other) => {
+                return Err(Problem::bad_request(format!(
+                    "period_type must be 'monthly' or 'weekly', got '{other}'"
+                )));
+            }
+            None if info.period_type == chapkit_core::PeriodType::Weekly => Resolution::Weekly,
+            None => Resolution::Monthly,
+        };
+        let num_periods = p.num_periods.unwrap_or(50).clamp(1, 10_000);
+        let mut spec = Spec {
+            num_locations: p.num_locations.unwrap_or(5).clamp(1, 10_000),
+            num_periods,
+            num_features: p.num_features.unwrap_or(3).min(100),
+            required_covariates: info.required_covariates.clone(),
+            additional_covariates: config_covariates,
+            resolution,
+            start_year: 2020,
+        };
+        let seed = p.seed.filter(|s| *s >= 0).map(i64::cast_unsigned);
+        let want_geo = p.include_geo.unwrap_or(info.requires_geo);
+        let points = p.geo_type.as_deref() == Some("point");
+        let kind = p.kind.unwrap_or_else(|| "train".into());
+        // Rows the payload holds: the predict payload has the history and the future.
+        let periods = match kind.as_str() {
+            "predict" => {
+                let lower = info.min_prediction_periods.max(1) as usize;
+                let upper = (info.max_prediction_periods as usize).max(lower);
+                spec.num_periods = num_periods.clamp(lower, upper);
+                num_periods + spec.num_periods
+            }
+            "train" => num_periods,
+            other => {
+                return Err(Problem::bad_request(format!(
+                    "kind must be 'train' or 'predict', got '{other}'"
+                )));
+            }
+        };
+        let columns = 6
+            + spec.num_features
+            + spec.required_covariates.len()
+            + spec.additional_covariates.len();
+        let cells = spec
+            .num_locations
+            .saturating_mul(periods)
+            .saturating_mul(columns);
+        if cells > MAX_SAMPLE_CELLS {
+            return Err(Problem::bad_request(format!(
+                "the sample would have {cells} cells (locations x periods x columns), more than the \
+                 limit of {MAX_SAMPLE_CELLS}; ask for fewer locations, periods or features"
+            )));
+        }
+        Ok(Self {
+            spec,
+            kind,
+            num_periods,
+            seed,
+            config_id: p.config_id,
+            geo: want_geo.then_some(points),
+        })
+    }
+
+    /// The training data (`kind` train): the `data` of the payload.
+    pub(crate) fn training_data(&self) -> ApiResult<DataFrame> {
+        chapkit_core::synth::Generator::new(self.seed)
+            .training_data(&self.spec)
+            .map_err(|e| Problem::bad_request(e.to_string()))
+    }
+
+    /// The `$generate-sample-data` payload, serialized.
+    fn payload(&self) -> ApiResult<Vec<u8>> {
+        use chapkit_core::synth::Generator;
+        let mut payload = if self.kind == "predict" {
+            let (historic, future) = Generator::new(self.seed)
+                .prediction_data(&self.spec, self.num_periods)
+                .map_err(|e| Problem::bad_request(e.to_string()))?;
+            serde_json::json!({"historic": historic, "future": future})
+        } else {
+            let mut v = serde_json::json!({"data": self.training_data()?});
+            if let Some(cid) = &self.config_id {
+                v["config_id"] = serde_json::json!(cid);
+            }
+            v
+        };
+        if let Some(points) = self.geo {
+            payload["geo"] = Generator::geo(self.spec.num_locations, points);
+        }
+        serde_json::to_vec(&payload).map_err(|_| Problem::internal())
+    }
+}
+
+/// Run `work` on a blocking thread that holds a permit throughout, bounded like `$predict-sync`:
+/// no large generation or serialization runs on an async worker.
+pub(crate) async fn on_blocking_pool<T: Send + 'static>(
+    s: &AppState,
+    work: impl FnOnce() -> ApiResult<T> + Send + 'static,
+) -> ApiResult<T> {
+    let permit = s
+        .inner
+        .sync_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| Problem::internal())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|_| Problem::internal())?
+}
+
 /// A ready-to-submit sample `$train` or `$predict` payload from the synthetic data
 /// generator (same columns and options as Python chapkit's).
 #[utoipa::path(get, path = "/$generate-sample-data", tag = "ML", params(SampleParams),
@@ -556,124 +692,13 @@ async fn generate_sample_data(
 ) -> ApiResult<axum::response::Response> {
     use axum::http::{HeaderValue, header::CONTENT_TYPE};
     use axum::response::IntoResponse;
-    use chapkit_core::synth::{Resolution, Spec};
-    let info = s.model().info();
-    let config_covariates = match &p.config_id {
-        Some(cid) => config_covariates(&s, cid).await?,
-        None => Vec::new(),
-    };
-    let resolution = match p.period_type.as_deref() {
-        Some("weekly") => Resolution::Weekly,
-        Some("monthly") => Resolution::Monthly,
-        Some(other) => {
-            return Err(Problem::bad_request(format!(
-                "period_type must be 'monthly' or 'weekly', got '{other}'"
-            )));
-        }
-        None if info.period_type == chapkit_core::PeriodType::Weekly => Resolution::Weekly,
-        None => Resolution::Monthly,
-    };
-    let num_periods = p.num_periods.unwrap_or(50).clamp(1, 10_000);
-    let mut spec = Spec {
-        num_locations: p.num_locations.unwrap_or(5).clamp(1, 10_000),
-        num_periods,
-        num_features: p.num_features.unwrap_or(3).min(100),
-        required_covariates: info.required_covariates.clone(),
-        additional_covariates: config_covariates,
-        resolution,
-        start_year: 2020,
-    };
-    let seed = p.seed.filter(|s| *s >= 0).map(i64::cast_unsigned);
-    let want_geo = p.include_geo.unwrap_or(info.requires_geo);
-    let points = p.geo_type.as_deref() == Some("point");
-    let kind = p.kind.unwrap_or_else(|| "train".into());
-    // Rows the payload holds: the predict payload has the history and the future.
-    let periods = match kind.as_str() {
-        "predict" => {
-            let lower = info.min_prediction_periods.max(1) as usize;
-            let upper = (info.max_prediction_periods as usize).max(lower);
-            spec.num_periods = num_periods.clamp(lower, upper);
-            num_periods + spec.num_periods
-        }
-        "train" => num_periods,
-        other => {
-            return Err(Problem::bad_request(format!(
-                "kind must be 'train' or 'predict', got '{other}'"
-            )));
-        }
-    };
-    let columns =
-        6 + spec.num_features + spec.required_covariates.len() + spec.additional_covariates.len();
-    let cells = spec
-        .num_locations
-        .saturating_mul(periods)
-        .saturating_mul(columns);
-    if cells > MAX_SAMPLE_CELLS {
-        return Err(Problem::bad_request(format!(
-            "the sample would have {cells} cells (locations x periods x columns), more than the \
-             limit of {MAX_SAMPLE_CELLS}; ask for fewer locations, periods or features"
-        )));
-    }
-    // Generated and serialized to the response bytes on a blocking thread that holds its permit
-    // throughout, bounded like $predict-sync: no large serialization runs on an async worker.
-    let permit = s
-        .inner
-        .sync_permits
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| Problem::internal())?;
-    let config_id = p.config_id;
-    let body = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        sample_payload(
-            &spec,
-            &kind,
-            num_periods,
-            seed,
-            config_id.as_deref(),
-            want_geo.then_some(points),
-        )
-    })
-    .await
-    .map_err(|_| Problem::internal())??;
+    let sample = Sample::new(&s, p).await?;
+    let body = on_blocking_pool(&s, move || sample.payload()).await?;
     Ok((
         [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
         body,
     )
         .into_response())
-}
-
-/// A `$generate-sample-data` payload, serialized: `predict` gives `num_periods` historic periods and
-/// `spec.num_periods` future ones; `geo` asks for a grid (`Some(true)` of points).
-fn sample_payload(
-    spec: &chapkit_core::synth::Spec,
-    kind: &str,
-    num_periods: usize,
-    seed: Option<u64>,
-    config_id: Option<&str>,
-    geo: Option<bool>,
-) -> ApiResult<Vec<u8>> {
-    use chapkit_core::synth::Generator;
-    let mut generator = Generator::new(seed);
-    let gen_err = |e: chapkit_core::Error| Problem::bad_request(e.to_string());
-    let mut payload = if kind == "predict" {
-        let (historic, future) = generator
-            .prediction_data(spec, num_periods)
-            .map_err(gen_err)?;
-        serde_json::json!({"historic": historic, "future": future})
-    } else {
-        let data = generator.training_data(spec).map_err(gen_err)?;
-        let mut v = serde_json::json!({"data": data});
-        if let Some(cid) = config_id {
-            v["config_id"] = serde_json::json!(cid);
-        }
-        v
-    };
-    if let Some(points) = geo {
-        payload["geo"] = Generator::geo(spec.num_locations, points);
-    }
-    serde_json::to_vec(&payload).map_err(|_| Problem::internal())
 }
 
 /// Run the model's `validate_train` / `validate_predict` on a blocking thread: they are model code,

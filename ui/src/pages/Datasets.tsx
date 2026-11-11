@@ -12,17 +12,18 @@ import { DropZone } from '@winterop-com/sokkel-ui/UploadTray'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@winterop-com/sokkel-ui/primitives/empty'
 import { toast } from '@winterop-com/sokkel-ui/primitives/toast'
-import { Upload } from 'lucide-react'
+import { Sparkles, Upload } from 'lucide-react'
 import { useState } from 'react'
 
 import { api, asApiError } from '../api/client'
 import type { Dataset } from '../api/types'
 import { useModel } from '../App'
-import { ACTIONS, UPLOAD_DATASET } from '../lib/commands'
+import { ACTIONS, GENERATE_DATASET, UPLOAD_DATASET } from '../lib/commands'
 import { count, dateOf, periodWord, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go, hashParam } from '../lib/router'
 import { ReadState } from '../parts'
+import { GenerateDialog } from './GenerateDialog'
 
 /** The files a dataset is read from. */
 const ACCEPT = ['.csv', '.json']
@@ -159,9 +160,30 @@ export function Datasets() {
         setUpload(null)
         if (hashParam('upload') !== undefined) go('/datasets')
     }
-    useShortcuts([{ id: UPLOAD_DATASET, key: 'u', label: 'Upload a dataset', group: 'Datasets', run: () => setUpload(NOTHING) }], [])
+    // `#/datasets?generate` (the palette's Generate a dataset from another page) opens the generator.
+    const [generating, setGenerating] = useState(() => hashParam('generate') !== undefined)
+    const closeGenerate = () => {
+        setGenerating(false)
+        if (hashParam('generate') !== undefined) go('/datasets')
+    }
+    useShortcuts(
+        [
+            { id: UPLOAD_DATASET, key: 'u', label: 'Upload a dataset', group: 'Datasets', run: () => setUpload(NOTHING) },
+            { id: GENERATE_DATASET, key: 'n', label: 'Generate a dataset', group: 'Datasets', run: () => setGenerating(true) },
+        ],
+        [],
+    )
     useCommands(
-        [{ title: ACTIONS, rank: 10, commands: [{ id: UPLOAD_DATASET, label: 'Upload a dataset', icon: Upload, ...bindingKeys({ key: 'u' }), onSelect: () => setUpload(NOTHING) }] }],
+        [
+            {
+                title: ACTIONS,
+                rank: 10,
+                commands: [
+                    { id: UPLOAD_DATASET, label: 'Upload a dataset', icon: Upload, ...bindingKeys({ key: 'u' }), onSelect: () => setUpload(NOTHING) },
+                    { id: GENERATE_DATASET, label: 'Generate a dataset', icon: Sparkles, keywords: ['sample', 'synthetic', 'seed'], ...bindingKeys({ key: 'n' }), onSelect: () => setGenerating(true) },
+                ],
+            },
+        ],
         [],
     )
     const [removing, setRemoving] = useState<Dataset | null>(null)
@@ -188,16 +210,22 @@ export function Datasets() {
             <PageHeader
                 title="Datasets"
                 count={datasets.data ? rows.length : undefined}
-                description="Data to evaluate the model on and to forecast from. Drop a CSV or JSON file anywhere here to upload it."
+                description="Data to evaluate the model on and to forecast from. Drop a CSV or JSON file anywhere here to upload it, or generate one."
                 actions={
-                    <Button size="sm" onClick={() => setUpload(NOTHING)}>
-                        <Upload aria-hidden />
-                        Upload
-                    </Button>
+                    <>
+                        <Button size="sm" variant="outline" onClick={() => setGenerating(true)}>
+                            <Sparkles aria-hidden />
+                            Generate
+                        </Button>
+                        <Button size="sm" onClick={() => setUpload(NOTHING)}>
+                            <Upload aria-hidden />
+                            Upload
+                        </Button>
+                    </>
                 }
             />
             {datasets.error ? (
-                <ReadState what="the datasets" resource={datasets} />
+                <ReadState what="the datasets" resource={datasets} primary />
             ) : (
                 <DataTable
                     columns={COLUMNS}
@@ -219,12 +247,17 @@ export function Datasets() {
                         <Empty>
                             <EmptyHeader>
                                 <EmptyTitle>No datasets yet</EmptyTitle>
-                                <EmptyDescription>Upload a CSV or JSON file, or drop one on this page.</EmptyDescription>
+                                <EmptyDescription>Upload a CSV or JSON file, drop one on this page, or generate one to try the model.</EmptyDescription>
                             </EmptyHeader>
                             <EmptyContent>
-                                <Button size="sm" variant="outline" onClick={() => setUpload(NOTHING)}>
-                                    Upload a dataset
-                                </Button>
+                                <div className="flex gap-2">
+                                    <Button size="sm" variant="outline" onClick={() => setUpload(NOTHING)}>
+                                        Upload a dataset
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={() => setGenerating(true)}>
+                                        Generate a dataset
+                                    </Button>
+                                </div>
                             </EmptyContent>
                         </Empty>
                     }
@@ -239,6 +272,16 @@ export function Datasets() {
                     onUploaded={(dataset) => {
                         setUpload(null)
                         datasets.reload()
+                        go(`/datasets/${dataset.id}`)
+                    }}
+                />
+            )}
+            {generating && (
+                <GenerateDialog
+                    open
+                    onOpenChange={(open) => !open && closeGenerate()}
+                    onGenerated={(dataset) => {
+                        setGenerating(false)
                         go(`/datasets/${dataset.id}`)
                     }}
                 />

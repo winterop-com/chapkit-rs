@@ -101,7 +101,7 @@ function ConfigView({ id }: { id: string }) {
             (failure: Error) => toast.add({ type: 'error', title: 'Could not delete the config', description: failure.message }),
         )
     return (
-        <PageState loading={config.loading} error={config.error?.detail ?? config.error?.message} status={config.error?.status} onRetry={config.reload}>
+        <PageState loading={config.loading} error={config.error?.detail ?? config.error?.message} status={config.error?.status} onRetry={config.reload} headingLevel="h1">
             {found && (
                 <div className="flex flex-col gap-6">
                     <PageHeader
@@ -185,7 +185,7 @@ function ConfigList() {
                 }
             />
             <ReadState what="the model's options" resource={schema} tone="warning" />
-            {configs.error ? <ReadState what="the configs" resource={configs} /> : <DataTable
+            {configs.error ? <ReadState what="the configs" resource={configs} primary /> : <DataTable
                 columns={COLUMNS}
                 rows={configs.data ?? []}
                 rowKey={(row) => row.id}

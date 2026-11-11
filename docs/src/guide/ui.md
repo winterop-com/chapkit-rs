@@ -33,6 +33,7 @@ it uses these chapkit-rs extensions:
 | endpoint | |
 |---|---|
 | `POST /api/v1/datasets` | Store a dataset: JSON `{name, data, target?}`, or a CSV or JSON `file` as `multipart/form-data` (with `name`, `target`) |
+| `POST /api/v1/datasets/$generate` | Store a dataset made by the sample-data generator (`$generate-sample-data`'s parameters and a `name`); its description's `generator` holds the settings and the seed ([Sample data](sample-data.md)) |
 | `GET /api/v1/datasets` | List datasets (paged with `page` and `size`, like configs); `q` keeps those whose name holds it |
 | `GET`, `DELETE /api/v1/datasets/{id}` | A dataset's description; delete it |
 | `GET /api/v1/datasets/{id}/$data` | The data as stored, chapkit DataFrame JSON; or a projection: `location` and `column` (repeatable) for some locations and columns, `before` and `last` for the last periods before one, `canonical=true` for the periods as chapkit writes them, in period order |
@@ -41,7 +42,11 @@ it uses these chapkit-rs extensions:
 | `GET /api/v1/artifacts?type=ml_backtest&order=desc` | Artifacts of one `data.type`, newest first with `order=desc` (paged with `page` and `size`); backtests and forecasts carry `data.summary` in place of their content; with `type`, `q` keeps those made from a dataset whose name holds it |
 | `GET /api/v1/configs?q=` | Configs whose name holds `q` (`q` is a chapkit-rs extension) |
 
-**Datasets** are stored as given, after a check: `time_period` in any form chap-core reads (`2024-01`,
+**Datasets** are uploaded, or generated: the Datasets page's Generate (or the palette's Generate a
+dataset) makes one with the sample-data generator, its period type and required covariates from the model,
+a config's covariates when one is chosen, and a seed, drawn by the service when left empty. A generated
+dataset's page shows the settings and the seed, the `$generate-sample-data` query that gives the same data,
+and Generate again, the dialog filled with them. Uploads are stored as given, after a check: `time_period` in any form chap-core reads (`2024-01`,
 `2024W01`, chap-core's CSV week ranges `2024-01-01/2024-01-07`), a `location` on every row, no location
 twice in a period, one kind of period, and a numeric target (`disease_cases` unless `target` names
 another). The description:
@@ -96,7 +101,7 @@ all. It asks the service with `q` (case-insensitive for ASCII letters), so a lar
 downloaded. Its list ends in See all, the results page (`#/search?q=laos`): every match, 25 of each
 kind at a time with More, narrowed by kind, the query kept in the address so Back from a result
 returns to it. A config found opens on its own page (`#/configs/{id}`), its options with ways to
-evaluate or forecast with it. The command palette goes to every page, runs the actions (upload a dataset, new
+evaluate or forecast with it. The command palette goes to every page, runs the actions (upload or generate a dataset, new
 evaluation, forecast or config, set or change the API key, light, dark or system scheme, the
 shortcuts) and lists the same search's results under them.
 
@@ -107,6 +112,7 @@ shortcuts) and lists the same search's results under them.
 | `?` | everywhere | Show the keyboard shortcuts |
 | `g` then `o` `d` `e` `f` `c` `j` `a` `s` | everywhere | Go to Overview, Datasets, Evaluate, Forecast, Configs, Jobs, Artifacts, System |
 | `u` | Datasets | Upload a dataset |
+| `n` | Datasets | Generate a dataset |
 | `n` | Configs | New config |
 | ⌘Enter (Ctrl Enter) | Evaluate, Forecast, in their fields too | Run the evaluation or forecast |
 

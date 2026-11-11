@@ -36,13 +36,14 @@ test('the actions go to their pages, ask for the key and show the shortcuts', ()
     for (const command of group!.commands) command.onSelect()
     expect(group!.commands.map((command) => command.label)).toEqual([
         'Upload a dataset',
+        'Generate a dataset',
         'New evaluation',
         'New forecast',
         'New config',
         'Set API key',
         'Keyboard shortcuts',
     ])
-    expect(went).toEqual(['/datasets?upload', '/evaluate', '/forecast', '/configs?new'])
+    expect(went).toEqual(['/datasets?upload', '/datasets?generate', '/evaluate', '/forecast', '/configs?new'])
     expect([asked, shown]).toEqual([1, 1])
     const [keyed] = actionCommands({ go: () => {}, hasKey: true, askKey: () => {}, showShortcuts: () => {} })
     expect(keyed!.commands.find((command) => command.id === 'api-key')?.label).toBe('Change API key')

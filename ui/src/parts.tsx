@@ -34,9 +34,22 @@ export const WEATHER = [
 
 /**
  * A read's failure, said with what failed and a retry; the children while it has not failed. `warning`
- * draws a read of secondary data the page stands without, in the warning tone.
+ * draws a read of secondary data the page stands without, in the warning tone; `primary`, the read a
+ * list page shows, heads its failure as a part under the page's own heading.
  */
-export function ReadState({ what, resource, tone, children }: { what: string; resource: Resource<unknown>; tone?: PageStateTone; children?: ReactNode }) {
+export function ReadState({
+    what,
+    resource,
+    tone,
+    primary = false,
+    children,
+}: {
+    what: string
+    resource: Resource<unknown>
+    tone?: PageStateTone
+    primary?: boolean
+    children?: ReactNode
+}) {
     const error = resource.error
     return (
         <PageState
@@ -45,6 +58,7 @@ export function ReadState({ what, resource, tone, children }: { what: string; re
             status={error?.status}
             onRetry={resource.reload}
             tone={tone}
+            headingLevel={primary ? 'h2' : 'p'}
         >
             {children}
         </PageState>

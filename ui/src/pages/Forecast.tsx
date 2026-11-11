@@ -138,7 +138,7 @@ function ForecastView({ id }: { id: string }) {
         saveFile(`forecast-${dataset.data?.name ?? id}.csv`, toCsv(rows, ['location', 'time_period', 'median', 'q10', 'q25', 'q75', 'q90']))
 
     return (
-        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload}>
+        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload} headingLevel="h1">
             {result && artifact.data && (
                 <Stack gap="section">
                     <PageHeader

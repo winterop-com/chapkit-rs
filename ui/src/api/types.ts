@@ -119,7 +119,24 @@ export interface Dataset {
     periods: number
     columns: string[]
     covariates: string[]
+    /** How a generated dataset was made; absent for an upload. */
+    generator?: GeneratorSettings
 }
+
+/** The sample-data generator's settings, as `POST /api/v1/datasets/$generate` takes them. */
+export interface GenerateRequest {
+    name: string
+    num_locations: number
+    num_periods: number
+    num_features: number
+    period_type: 'monthly' | 'weekly'
+    config_id?: string
+    /** Absent: the service draws one and records it. */
+    seed?: number
+}
+
+/** The settings a generated dataset was made with, as resolved, the seed always given. */
+export type GeneratorSettings = Omit<GenerateRequest, 'name' | 'seed'> & { seed: number }
 
 /** The scores chap-core computes, by metric id. */
 export type Metrics = Partial<Record<MetricId, number | null>>

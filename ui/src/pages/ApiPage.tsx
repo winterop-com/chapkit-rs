@@ -68,7 +68,7 @@ export function ApiPage() {
                 }
             />
             {spec.error ? (
-                <ReadState what="the OpenAPI document" resource={spec} />
+                <ReadState what="the OpenAPI document" resource={spec} primary />
             ) : (
                 <DataTable
                     columns={COLUMNS}

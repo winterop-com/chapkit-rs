@@ -14,8 +14,11 @@ use serde_json::json;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use crate::routes::ml::{Sample, SampleParams, on_blocking_pool};
 use crate::state::{AppState, store_problem};
-use crate::wire::{DatasetIn, DatasetMeta, DatasetOut, DatasetUpload};
+use crate::wire::{
+    DatasetGenerate, DatasetIn, DatasetMeta, DatasetOut, DatasetUpload, GeneratorSettings,
+};
 
 const PREFIX: &str = "/api/v1/datasets";
 
@@ -115,6 +118,7 @@ pub(crate) fn describe(data: &DataFrame, target: &str) -> Result<DatasetMeta, St
         periods: periods.len(),
         columns: data.names().to_vec(),
         covariates,
+        generator: None,
     })
 }
 
@@ -277,27 +281,46 @@ async fn create(State(s): State<AppState>, req: Request) -> ApiResult<Response> 
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("multipart/form-data"));
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("localhost")
-        .to_owned();
+    let host = host(req.headers());
     let (name, frame, target) = if multipart {
         upload(req).await?
     } else {
         let Json(body) = Json::<DatasetIn>::from_request(req, &()).await?;
         (body.name, body.data, body.target)
     };
-    if name.trim().is_empty() {
-        return Err(invalid("name", "The name must not be empty"));
-    }
+    check_name(&name)?;
     let target = target.unwrap_or_else(|| cols::DISEASE_CASES.to_owned());
     let meta = describe(&frame, &target).map_err(Problem::bad_request)?;
     let data = serde_json::to_vec(&frame).map_err(|_| Problem::internal())?;
+    insert(&s, &host, name, &meta, data).await
+}
+
+fn check_name(name: &str) -> ApiResult<()> {
+    if name.trim().is_empty() {
+        return Err(invalid("name", "The name must not be empty"));
+    }
+    Ok(())
+}
+
+fn host(headers: &header::HeaderMap) -> String {
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost")
+        .to_owned()
+}
+
+/// Store a described dataset and answer 201 with it and its `Location`.
+async fn insert(
+    s: &AppState,
+    host: &str,
+    name: String,
+    meta: &DatasetMeta,
+    data: Vec<u8>,
+) -> ApiResult<Response> {
     let now = entity_now();
     let id = chapkit_http::ids::new_id().to_string();
-    let meta_json = serde_json::to_value(&meta).map_err(|_| Problem::internal())?;
+    let meta_json = serde_json::to_value(meta).map_err(|_| Problem::internal())?;
     let row = DatasetRow {
         id: id.clone(),
         name,
@@ -314,6 +337,61 @@ async fn create(State(s): State<AppState>, req: Request) -> ApiResult<Response> 
         res.headers_mut().insert(header::LOCATION, v);
     }
     Ok(res)
+}
+
+/// Store a dataset made by the sample-data generator: the training data
+/// `GET /api/v1/ml/$generate-sample-data` gives for the same parameters (no geo: stored datasets
+/// hold a table only), with `disease_cases` as the target. Without a seed (or with a negative one)
+/// a random seed is drawn; the settings and the seed are kept in `generator`, so the same dataset
+/// can be made again.
+#[utoipa::path(post, path = "/$generate", tag = "Datasets", request_body = DatasetGenerate,
+    responses((status = CREATED, body = DatasetOut), (status = BAD_REQUEST, body = Problem),
+        (status = NOT_FOUND, body = Problem), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
+async fn generate(
+    State(s): State<AppState>,
+    headers: header::HeaderMap,
+    Json(body): Json<DatasetGenerate>,
+) -> ApiResult<Response> {
+    use chapkit_core::synth::Resolution;
+    check_name(&body.name)?;
+    let seed = match body.seed {
+        Some(seed) if seed >= 0 => seed,
+        // Below 2^53, so it reads back exactly as a JSON number in JavaScript too.
+        _ => (chapkit_core::rng::Rng::from_time().next_u64() >> 11).cast_signed(),
+    };
+    let params = SampleParams {
+        kind: Some("train".into()),
+        config_id: body.config_id,
+        num_locations: body.num_locations,
+        num_periods: body.num_periods,
+        num_features: body.num_features,
+        period_type: body.period_type,
+        geo_type: None,
+        include_geo: Some(false),
+        seed: Some(seed),
+    };
+    let sample = Sample::new(&s, params).await?;
+    let settings = GeneratorSettings {
+        num_locations: sample.spec.num_locations,
+        num_periods: sample.num_periods,
+        num_features: sample.spec.num_features,
+        period_type: match sample.spec.resolution {
+            Resolution::Monthly => "monthly",
+            Resolution::Weekly => "weekly",
+        }
+        .into(),
+        config_id: sample.config_id.clone(),
+        seed,
+    };
+    let (meta, data) = on_blocking_pool(&s, move || {
+        let frame = sample.training_data()?;
+        let mut meta = describe(&frame, cols::DISEASE_CASES).map_err(Problem::bad_request)?;
+        meta.generator = Some(settings);
+        let data = serde_json::to_vec(&frame).map_err(|_| Problem::internal())?;
+        Ok((meta, data))
+    })
+    .await?;
+    insert(&s, &host(&headers), body.name, &meta, data).await
 }
 
 /// Get a dataset's description.
@@ -527,6 +605,7 @@ async fn data(
 pub fn router(state: AppState) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(list, create))
+        .routes(routes!(generate))
         .routes(routes!(get, delete))
         .routes(routes!(data))
         .with_state(state)

@@ -68,7 +68,7 @@ function ArtifactView({ id }: { id: string }) {
     const artifact = useResource((signal) => api.artifact(id, signal), [id])
     const data = artifact.data
     return (
-        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload}>
+        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload} headingLevel="h1">
             {data && (
                 <Stack gap="section">
                     <PageHeader
@@ -135,7 +135,7 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
     return (
         <>
             <PageHeader title="Artifacts" count={artifacts.data?.length} description="What the service stored: evaluations, forecasts, trained models and predictions." />
-            {artifacts.error ? <ReadState what="the artifacts" resource={artifacts} /> : <DataTable
+            {artifacts.error ? <ReadState what="the artifacts" resource={artifacts} primary /> : <DataTable
                 columns={COLUMNS}
                 rows={roots}
                 rowKey={(row) => row.id}

@@ -1,1 +1,0 @@
-import{a as e}from"./rolldown-runtime-BWaJ3C7D.js";import{t}from"./react-CaKr0epQ.js";function n(e,t=-(2**53-1),n=2**53-1){return Math.max(t,Math.min(e,n))}function r(e){return e==null?void 0:`${e}-label`}function i(e,t){return e??t}var a=e(t(),1),o=a.createContext(void 0),s={disableStyleElements:!1};function c(){return a.useContext(o)??s}export{n as i,r as n,i as r,c as t};

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { score } from './format'
+import { periodWord, score } from './format'
 
 test('score keeps significant zeros and drops padding', () => {
     expect(score(140)).toBe('140')
@@ -12,4 +12,8 @@ test('score keeps significant zeros and drops padding', () => {
     expect(score(1234.4)).toBe('1,234')
     expect(score(0.397, true)).toBe('39.7%')
     expect(score(null)).toBe('-')
+})
+
+test('period types read the same from datasets and from the generator', () => {
+    expect([periodWord('month'), periodWord('monthly'), periodWord('week'), periodWord('weekly')]).toEqual(['Monthly', 'Monthly', 'Weekly', 'Weekly'])
 })

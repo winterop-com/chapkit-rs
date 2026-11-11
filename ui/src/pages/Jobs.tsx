@@ -59,7 +59,7 @@ export function Jobs() {
                 }
             />
             {/* A failed refresh keeps the jobs read before in view, under what failed. */}
-            <ReadState what="the jobs" resource={jobs} />
+            <ReadState what="the jobs" resource={jobs} primary />
             {(jobs.error === undefined || jobs.data !== undefined) && (
                 <DataTable
                     columns={COLUMNS}

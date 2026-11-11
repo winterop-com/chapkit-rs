@@ -2239,6 +2239,137 @@ async fn sample_data_is_bounded() {
     assert_eq!(s, StatusCode::OK, "{p}");
 }
 
+/// `datasets/$generate` stores what `$generate-sample-data` gives for the same parameters, and
+/// records the settings and the seed so the dataset can be made again.
+#[tokio::test]
+async fn generated_datasets_are_the_sample_data() {
+    let app = app().await;
+    let cfg = json!({"name": "cfg", "data": {"additional_continuous_covariates": ["humidity"]}});
+    let (s, cfg, _) = call(&app, "POST", "/api/v1/configs", Some(cfg)).await;
+    assert_eq!(s, StatusCode::CREATED, "{cfg}");
+    let cid = cfg["id"].as_str().unwrap();
+    let body = json!({"name": "gen", "num_locations": 3, "num_periods": 14, "num_features": 1,
+        "period_type": "weekly", "config_id": cid, "seed": 7});
+    let (s, d, headers) = call(&app, "POST", "/api/v1/datasets/$generate", Some(body)).await;
+    assert_eq!(s, StatusCode::CREATED, "{d}");
+    let id = d["id"].as_str().unwrap();
+    assert!(
+        headers["location"]
+            .to_str()
+            .unwrap()
+            .ends_with(&format!("/api/v1/datasets/{id}"))
+    );
+    assert_eq!(
+        (&d["name"], &d["target"], &d["rows"], &d["period_type"]),
+        (
+            &json!("gen"),
+            &json!("disease_cases"),
+            &json!(42),
+            &json!("week")
+        )
+    );
+    assert_eq!(
+        d["generator"],
+        json!({"num_locations": 3, "num_periods": 14, "num_features": 1,
+            "period_type": "weekly", "config_id": cid, "seed": 7})
+    );
+    assert!(
+        d["covariates"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("humidity")),
+        "{d}"
+    );
+    let uri = format!(
+        "/api/v1/ml/$generate-sample-data?num_locations=3&num_periods=14&num_features=1\
+         &period_type=weekly&config_id={cid}&seed=7"
+    );
+    let (s, sample, _) = call(&app, "GET", &uri, None).await;
+    assert_eq!(s, StatusCode::OK, "{sample}");
+    let (_, data, _) = call(&app, "GET", &format!("/api/v1/datasets/{id}/$data"), None).await;
+    assert_eq!(data, sample["data"], "the stored data is the sample's");
+    let (_, got, _) = call(&app, "GET", &format!("/api/v1/datasets/{id}"), None).await;
+    assert_eq!(got["generator"], d["generator"]);
+
+    // Without a seed (or with a negative one), a random one is drawn and recorded; the same
+    // settings with it make the same data.
+    for body in [json!({"name": "r"}), json!({"name": "r", "seed": -1})] {
+        let (s, d, _) = call(&app, "POST", "/api/v1/datasets/$generate", Some(body)).await;
+        assert_eq!(s, StatusCode::CREATED, "{d}");
+        let g = &d["generator"];
+        assert_eq!(
+            (
+                &g["num_locations"],
+                &g["num_periods"],
+                &g["num_features"],
+                &g["period_type"]
+            ),
+            (&json!(5), &json!(50), &json!(3), &json!("monthly"))
+        );
+        assert!(g.get("config_id").is_none(), "{g}");
+        let seed = g["seed"].as_i64().unwrap();
+        assert!(
+            (0..1 << 53).contains(&seed),
+            "a seed JavaScript reads exactly: {seed}"
+        );
+        let uri = format!("/api/v1/ml/$generate-sample-data?seed={seed}");
+        let (_, sample, _) = call(&app, "GET", &uri, None).await;
+        let uri = format!("/api/v1/datasets/{}/$data", d["id"].as_str().unwrap());
+        let (_, data, _) = call(&app, "GET", &uri, None).await;
+        assert_eq!(data, sample["data"]);
+    }
+
+    // An upload records no generator.
+    let (s, up, _) = call(
+        &app,
+        "POST",
+        "/api/v1/datasets",
+        Some(json!({"name": "up", "data": backtest_data()})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{up}");
+    assert!(up.get("generator").is_none(), "{up}");
+
+    for (body, status) in [
+        (json!({"num_periods": 4}), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!({"name": "  "}), StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            json!({"name": "x", "period_type": "daily"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"name": "x", "config_id": "nope"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"name": "x", "config_id": "01J00000000000000000000000"}),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            json!({"name": "x", "num_locations": 10000, "num_periods": 10000}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (s, p, _) = call(
+            &app,
+            "POST",
+            "/api/v1/datasets/$generate",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(s, status, "{body}: {p}");
+    }
+    let body = json!({"name": "x", "num_locations": 10000, "num_periods": 10000});
+    let (_, p, _) = call(&app, "POST", "/api/v1/datasets/$generate", Some(body)).await;
+    assert!(p["detail"].as_str().unwrap().contains("limit"), "{p}");
+    let (_, all, _) = call(&app, "GET", "/api/v1/datasets", None).await;
+    assert_eq!(
+        all.as_array().unwrap().len(),
+        4,
+        "a refused request stores nothing"
+    );
+}
+
 static GATE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static GATE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

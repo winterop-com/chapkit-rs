@@ -13,6 +13,7 @@ use chapkit_core::{DataFrame, Error, Period, Result, cols};
 use serde::Serialize;
 
 use crate::backtest::Forecast;
+use crate::prepare::location_key;
 
 /// A chap-core metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -157,17 +158,19 @@ fn observations(data: &DataFrame) -> Result<HashMap<(String, Period), f64>> {
         if v.is_nan() {
             continue;
         }
-        if let (Some(l), Some(p)) = (loc.str_at(row), tp.str_at(row).and_then(Period::parse)) {
-            out.entry((l.to_owned(), p)).or_insert(*v);
+        // Keyed as preparation names the locations (numbers as text), as the forecasts are.
+        if let Some(p) = tp.str_at(row).and_then(Period::parse) {
+            out.entry((location_key(loc, row), p)).or_insert(*v);
         }
     }
     Ok(out)
 }
 
-/// numpy's default (linear) percentile of sorted values, computed as numpy does.
+/// numpy's default (linear) percentile of sorted values, computed as numpy does: `NaN` when any
+/// value is (log1p of a sample below -1, say), wherever the percentile falls.
 fn percentile(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
-    if n == 0 {
+    if n == 0 || sorted.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
     let virtual_index = (n - 1) as f64 * (q / 100.0);
@@ -345,7 +348,7 @@ pub fn score(forecasts: &[Forecast], data: &DataFrame) -> Result<Scores> {
 }
 
 /// The median and the 10th, 25th, 75th and 90th percentiles of a forecast's samples, by numpy's
-/// default (linear) method, as the metrics compute them. `NaN` samples sort last.
+/// default (linear) method, as the metrics compute them: `NaN` when a sample is.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Quantiles {
     pub median: f64,
@@ -447,6 +450,52 @@ mod tests {
             assert!((percentile(&s, q) - want).abs() < 1e-12, "{q}");
         }
         assert_eq!(percentile(&[5.0], 90.0), 5.0);
+    }
+
+    /// numpy's percentile is NaN when any value is: samples below -1 have no log1p, so chap-core's
+    /// log-Winkler scores are NaN, whichever samples the percentiles fall on.
+    #[test]
+    fn log_winkler_is_nan_when_a_sample_has_no_log1p() {
+        let mut samples = vec![-2.0, 0.0];
+        samples.extend((1..99).map(f64::from));
+        let m = row_metrics(&samples, 5.0);
+        let at = |metric: Metric| m[metric.index()];
+        assert!(at(Metric::Winkler10_90Log1p).is_nan());
+        assert!(at(Metric::Winkler25_75Log1p).is_nan());
+        assert!(at(Metric::Winkler10_90).is_finite());
+        assert!(percentile(&[1.0, 2.0, f64::NAN], 10.0).is_nan());
+    }
+
+    /// Numeric locations are text in the forecasts (as preparation writes them), and so in the
+    /// observations.
+    #[test]
+    fn numeric_locations_are_scored() {
+        let data = DataFrame::from_columns(vec![
+            (
+                "time_period",
+                chapkit_core::Column::from_strs(["2024-01", "2024-02"]),
+            ),
+            (
+                "location",
+                chapkit_core::Column::Int(vec![Some(1), Some(1)]),
+            ),
+            (
+                "disease_cases",
+                chapkit_core::Column::Float(vec![Some(5.0), Some(6.0)]),
+            ),
+        ])
+        .unwrap();
+        let f = Forecast {
+            split: 0,
+            location: "1".into(),
+            time_period: "2024-02".into(),
+            horizon: 1,
+            samples: vec![5.0, 7.0],
+        };
+        let scores = score(std::slice::from_ref(&f), &data).unwrap();
+        assert_eq!(scores.rows, 1);
+        assert!((scores.get(Metric::Mae) - 0.0).abs() < 1e-12);
+        assert_eq!(summarize(&[f], &data).unwrap()[0].observed, Some(6.0));
     }
 
     #[test]

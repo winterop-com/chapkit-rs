@@ -109,7 +109,12 @@ gives chap-core's forecasts only with filling on.
 | `pad`, `--no-pad` | pad to the full range (chap-core) | each location keeps its own first and last period |
 
 `chapkit::eval::prepare` is the step on its own; a backtest runs it before splitting. Sunday-start weeks
-cannot be filled or padded yet.
+cannot be filled or padded yet, and data mixing monthly and weekly periods is an error.
+
+Two limits keep a request from exhausting memory; both are checked before anything is allocated. The
+prepared dataset holds at most 60 million rows (`MAX_PREPARED_ROWS`; 100,000 locations of ten years of
+weekly data fit), and the splits, built at once, hold at most 250 million rows together
+(`MAX_SPLIT_ROWS`; 100,000 locations of ten years of monthly data with 7 splits hold about 82 million).
 
 **Untrained locations**, as chap-core's REST backtest (`validate_and_filter_dataset_for_evaluation`, after
 preparation and masking): a location with no observed target before the test windows (in the first
@@ -177,7 +182,7 @@ The tests in `crates/chapkit-eval/tests/parity.rs` check, for each case:
 | the locations dropped as untrained | exact | - |
 | the future frame from the climatology, damped persistence and observed providers | 1e-9 relative | below 1e-13 |
 | the future frame from MSTL + ARIMA | 1e-3 relative | 3.8e-4 |
-| every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and two test models | 1e-12 relative | 1.4e-15 |
+| every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and three test models (one with samples below -1, whose log1p is `NaN`: numpy's percentile then makes the log-Winkler scores `NaN`) | 1e-12 relative | 1.4e-15 |
 | whole backtests of the two test models (repeated in Rust; one counts periods since the last observation): forecasts and metrics | 1e-12 relative | 5.0e-16 |
 
 A duplicate row is rejected, and with `--keep-gaps --no-pad` the periods-since-last-observation model no

@@ -31,9 +31,52 @@ impl Default for Prepare {
     }
 }
 
-/// The periods from `first` to `last`, contiguous. Fails for Sunday-start weeks.
+/// The most rows [`prepare`] makes, after filling and padding: chap-core's preparation of a
+/// larger dataset is refused before anything is allocated. 100,000 locations of ten years of
+/// weekly data fit.
+pub const MAX_PREPARED_ROWS: usize = 60_000_000;
+
+/// The number of periods from `first` to `last` (inclusive, 0 when `last` is earlier). Fails for
+/// a monthly and a weekly period, and for Sunday-start weeks.
+pub(crate) fn span(first: Period, last: Period) -> Result<usize> {
+    if std::mem::discriminant(&first) != std::mem::discriminant(&last) {
+        return Err(mixed(first, last));
+    }
+    if last <= first {
+        return Ok(usize::from(first == last));
+    }
+    let (Some(a), Some(b)) = (first.ordinal(), last.ordinal()) else {
+        return Err(Error::invalid(format!(
+            "cannot fill or pad Sunday-start weeks ({first}); keep the gaps and do not pad"
+        )));
+    };
+    usize::try_from(b - a + 1).map_err(|_| Error::invalid("period range out of bounds"))
+}
+
+fn mixed(a: Period, b: Period) -> Error {
+    Error::invalid(format!(
+        "data mixes monthly and weekly periods ({a} and {b})"
+    ))
+}
+
+/// Refuse `rows` prepared rows over [`MAX_PREPARED_ROWS`].
+fn check_rows(rows: usize) -> Result<()> {
+    if rows > MAX_PREPARED_ROWS {
+        return Err(Error::invalid(format!(
+            "the prepared dataset would have {rows} rows (periods filled and padded per location), \
+             more than the limit of {MAX_PREPARED_ROWS}"
+        )));
+    }
+    Ok(())
+}
+
+/// The periods from `first` to `last`, contiguous. Fails for Sunday-start weeks, for a monthly
+/// and a weekly period, and for more than [`MAX_PREPARED_ROWS`] periods.
 pub(crate) fn contiguous(first: Period, last: Period) -> Result<Vec<Period>> {
-    let mut out = vec![first];
+    let n = span(first, last)?;
+    check_rows(n)?;
+    let mut out = Vec::with_capacity(n);
+    out.push(first);
     let mut p = first;
     while p < last {
         p = p.succ().ok_or_else(|| {
@@ -46,6 +89,12 @@ pub(crate) fn contiguous(first: Period, last: Period) -> Result<Vec<Period>> {
     Ok(out)
 }
 
+/// A row's location as text: non-text locations (numbers) become text, as in chap-core.
+pub(crate) fn location_key(loc: &Column, row: usize) -> String {
+    loc.str_at(row)
+        .map_or_else(|| loc.json_at(row).to_string(), str::to_owned)
+}
+
 /// Row index per (location, period): locations sorted, each location's rows by period.
 type Index = BTreeMap<String, BTreeMap<Period, usize>>;
 
@@ -55,6 +104,7 @@ fn index(data: &DataFrame) -> Result<Index> {
         data.require(cols::LOCATION)?,
     );
     let mut out: Index = BTreeMap::new();
+    let mut seen: Option<Period> = None;
     for row in 0..data.n_rows() {
         let label = tp.str_at(row).unwrap_or_default();
         let period = Period::parse(label).ok_or_else(|| {
@@ -62,10 +112,13 @@ fn index(data: &DataFrame) -> Result<Index> {
                 "time_period {label:?} in row {row} is not a month or week"
             ))
         })?;
-        // Non-text locations (numbers) become text, as in chap-core.
-        let location = loc
-            .str_at(row)
-            .map_or_else(|| loc.json_at(row).to_string(), str::to_owned);
+        match seen {
+            Some(s) if std::mem::discriminant(&s) != std::mem::discriminant(&period) => {
+                return Err(mixed(s, period));
+            }
+            _ => seen = Some(period),
+        }
+        let location = location_key(loc, row);
         let rows = out.entry(location.clone()).or_default();
         if rows.insert(period, row).is_some() {
             return Err(Error::invalid(format!(
@@ -111,6 +164,23 @@ pub fn prepare(data: &DataFrame, options: &Prepare) -> Result<DataFrame> {
     let (Some(first), Some(last)) = (first, last) else {
         return Ok(data.clone());
     };
+    // The rows this makes, counted before any is allocated.
+    let mut total = 0usize;
+    for by_period in index.values() {
+        let (Some(&own_first), Some(&own_last)) =
+            (by_period.keys().next(), by_period.keys().next_back())
+        else {
+            continue;
+        };
+        let n = match (options.pad, options.fill_gaps) {
+            (true, true) => span(first, last)?,
+            (true, false) => span(first, own_first)? + by_period.len() + span(own_last, last)? - 2,
+            (false, true) => span(own_first, own_last)?,
+            (false, false) => by_period.len(),
+        };
+        total = total.saturating_add(n);
+    }
+    check_rows(total)?;
     let mut periods: Vec<Period> = Vec::new();
     let mut rows: Vec<Option<usize>> = Vec::new();
     let mut locations: Vec<&str> = Vec::new();
@@ -225,6 +295,45 @@ mod tests {
         };
         // B is padded after 2020-03, its gap at 2020-02 stays.
         assert_eq!(prepare(&data, &pad_only).unwrap().n_rows(), 6);
+    }
+
+    /// Months order before weeks, so filling from a month towards a week never ended.
+    #[test]
+    fn mixed_months_and_weeks_are_an_error() {
+        let data = frame(&[("2024-01", "A", Some(1.0)), ("2024W02", "A", Some(2.0))]);
+        for (fill_gaps, pad) in [(true, true), (false, false)] {
+            let e = prepare(&data, &Prepare { fill_gaps, pad })
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("mixes monthly and weekly"), "{e}");
+        }
+    }
+
+    /// The rows filling and padding would make are counted before any is allocated.
+    #[test]
+    fn prepared_rows_are_bounded() {
+        // 108,000 months each for 600 locations: 64.8 million rows.
+        let names: Vec<String> = (0..600).map(|i| format!("L{i}")).collect();
+        let mut rows = vec![("1000-01", "L0", Some(1.0))];
+        rows.extend(names.iter().map(|l| ("9999-12", l.as_str(), Some(1.0))));
+        let data = frame(&rows);
+        let e = prepare(&data, &Prepare::default()).unwrap_err().to_string();
+        assert!(e.contains("more than the limit"), "{e}");
+        let keep = Prepare {
+            fill_gaps: false,
+            pad: false,
+        };
+        assert_eq!(prepare(&data, &keep).unwrap().n_rows(), 601);
+        // 100,000 locations of ten years, monthly or weekly, fit.
+        assert!(check_rows(100_000 * 522).is_ok());
+        assert_eq!(
+            span(
+                Period::parse("2020W01").unwrap(),
+                Period::parse("2021W01").unwrap()
+            )
+            .unwrap(),
+            54
+        );
     }
 
     #[test]

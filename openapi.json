@@ -10,7 +10,7 @@
         "tags": [
           "Artifacts"
         ],
-        "summary": "List artifact summaries (`data` without `content`), optionally of one `type`.",
+        "summary": "List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest\nfirst. Backtests and forecasts carry `data.summary`, enough to list them without their content.",
         "operationId": "list",
         "parameters": [
           {
@@ -43,6 +43,18 @@
             "name": "type",
             "in": "query",
             "description": "Only artifacts whose `data.type` is this (`ml_training`, `ml_prediction`, `ml_backtest`,\n`ml_forecast`, ...). chapkit-rs extension.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`asc` (oldest first, the default) or `desc` (newest first). chapkit-rs extension.",
             "required": false,
             "schema": {
               "type": [
@@ -1056,7 +1068,7 @@
         "tags": [
           "Datasets"
         ],
-        "summary": "The dataset as stored, chapkit DataFrame JSON; with `location` (repeatable), only those\nlocations' rows.",
+        "summary": "The dataset as stored, chapkit DataFrame JSON, or a projection of it: `location`\n(repeatable) for some locations' rows, `column` (repeatable) for only those columns besides\n`time_period` and `location`, `before` for the periods before one, `last` for the last periods,\nand `canonical=true` for the periods as chapkit writes them (`2024-01`, `2024W03`, `2024SunW03`),\nthe rows in period order.",
         "operationId": "data",
         "parameters": [
           {
@@ -1079,6 +1091,47 @@
               }
             },
             "explode": true
+          },
+          {
+            "name": "column",
+            "in": "query",
+            "description": "Only these columns besides time_period and location (repeatable)",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only the periods before this one, in any form a dataset takes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "last",
+            "in": "query",
+            "description": "Only the last this many periods (after `before`)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "canonical",
+            "in": "query",
+            "description": "Periods as chapkit writes them, the rows in period order",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {

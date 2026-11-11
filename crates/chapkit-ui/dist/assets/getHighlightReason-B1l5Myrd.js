@@ -1,1 +1,0 @@
-import{$t as e,Yt as t,Zt as n}from"./composite-BT6JZLMm.js";function r(r){return r==null?n:r.type.startsWith(`key`)?t:r.type.startsWith(`mouse`)||r.type.startsWith(`pointer`)?e:n}export{r as t};

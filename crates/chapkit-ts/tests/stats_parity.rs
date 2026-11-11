@@ -17,13 +17,25 @@ fn rel(a: f64, b: f64) -> f64 {
     (a - b).abs() / b.abs().max(1.0)
 }
 
+/// The largest relative difference; infinite where one side is missing (`NaN`) and the other is
+/// not, as `f64::max` would skip a `NaN` difference.
 fn worst(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter()
         .zip(b)
-        .filter(|(x, y)| !x.is_nan() || !y.is_nan())
-        .map(|(x, y)| rel(*x, *y))
+        .map(|(x, y)| match (x.is_nan(), y.is_nan()) {
+            (true, true) => 0.0,
+            (false, false) => rel(*x, *y),
+            _ => f64::INFINITY,
+        })
         .fold(0.0, f64::max)
+}
+
+#[test]
+fn worst_counts_a_missing_value() {
+    assert_eq!(worst(&[f64::NAN], &[10.0]), f64::INFINITY);
+    assert_eq!(worst(&[10.0], &[f64::NAN]), f64::INFINITY);
+    assert_eq!(worst(&[f64::NAN, 1.0], &[f64::NAN, 0.5]), 0.5);
 }
 
 #[test]

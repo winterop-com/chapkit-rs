@@ -64,24 +64,3 @@ export const periodWord = (type: string | null | undefined) =>
 
 /** A short id: the last characters of a ULID, which differ between ids made close together. */
 export const shortId = (id: string) => id.slice(-8)
-
-/**
- * A period as the service writes it after chap-core's preparation, from the way a file wrote it: a
- * week given as its dates (`2019-01-07/2019-01-13`) is its ISO week (`2019W02`), a month given as
- * `201901` is `2019-01`. Others are kept as they are.
- */
-export function canonicalPeriod(period: string): string {
-    const week = /^(\d{4})-(\d{2})-(\d{2})\/\d{4}-\d{2}-\d{2}$/.exec(period)
-    if (week !== null) {
-        const day = new Date(Date.UTC(Number(week[1]), Number(week[2]) - 1, Number(week[3])))
-        // The ISO week's Thursday decides its year.
-        const thursday = new Date(day.getTime() + (3 - ((day.getUTCDay() + 6) % 7)) * 86_400_000)
-        const year = thursday.getUTCFullYear()
-        const first = Date.UTC(year, 0, 1)
-        const number = Math.floor((thursday.getTime() - first) / 86_400_000 / 7) + 1
-        return `${year}W${String(number).padStart(2, '0')}`
-    }
-    const month = /^(\d{4})(\d{2})$/.exec(period)
-    if (month !== null) return `${month[1]}-${month[2]}`
-    return period
-}

@@ -10,7 +10,7 @@
 use serde_json::{Value, json};
 
 use crate::rng::Rng;
-use crate::{Column, DataFrame, Result};
+use crate::{Column, DataFrame, Error, Period, Result};
 
 /// Period resolution of generated data.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -30,13 +30,33 @@ impl Resolution {
         }
     }
 
-    fn period_id(self, start_year: i32, idx: usize) -> String {
-        let per = self.per_year();
-        let year = start_year + (idx / per) as i32;
-        match self {
-            Resolution::Monthly => format!("{year}-{:02}", idx % per + 1),
-            Resolution::Weekly => format!("{year}-W{:02}", idx % per + 1),
+    /// The labels of `count` periods from absolute period `start` (0 = the first of
+    /// `start_year`). Weeks follow the ISO calendar (53 in some years), as [`Period::succ`] does.
+    fn period_ids(self, start_year: i32, start: usize, count: usize) -> Result<Vec<String>> {
+        let mut p = match self {
+            Resolution::Monthly => Period::Month {
+                year: start_year,
+                month: 1,
+            },
+            Resolution::Weekly => Period::Week {
+                year: start_year,
+                week: 1,
+                sunday: false,
+            },
+        };
+        let mut out = Vec::with_capacity(count);
+        for i in 0..start + count {
+            if i >= start {
+                out.push(match p {
+                    Period::Month { year, month } => format!("{year}-{month:02}"),
+                    Period::Week { year, week, .. } => format!("{year}-W{week:02}"),
+                });
+            }
+            p = p
+                .succ()
+                .ok_or_else(|| Error::invalid(format!("no period after {p}")))?;
         }
+        Ok(out)
     }
 }
 
@@ -149,10 +169,12 @@ impl Generator {
         let (mut rain, mut temp) = (Vec::with_capacity(rows), Vec::with_capacity(rows));
         let mut extra: Vec<Vec<f64>> = (0..n_extra).map(|_| Vec::with_capacity(rows)).collect();
         let per = spec.resolution.per_year();
-        for p in start..start + count {
+        let labels = spec.resolution.period_ids(spec.start_year, start, count)?;
+        for (p, label) in (start..start + count).zip(&labels) {
+            // The season: 52 weeks a year, week 53 continuing the cycle.
             let year_fraction = (p % per) as f64 / per as f64;
             for (l, lp) in params.iter().enumerate() {
-                tp.push(spec.resolution.period_id(spec.start_year, p));
+                tp.push(label.clone());
                 loc.push(format!("location_{l}"));
                 let season = (std::f64::consts::TAU * (year_fraction - lp.phase)).sin();
                 let rainfall = (150.0 + 130.0 * season + self.rng.uniform(-25.0, 25.0)).max(0.0);
@@ -288,13 +310,37 @@ mod tests {
             Period::parse(df.column("time_period").unwrap().str_at(r).unwrap()).unwrap()
         };
         assert_eq!(tp(&h, h.n_rows() - 1).to_string(), "2020W52");
-        assert_eq!(tp(&f, 0).to_string(), "2021W01");
+        // 2020 has an ISO week 53.
+        assert_eq!(tp(&f, 0).to_string(), "2020W53");
         assert!(
             f.f64_column("disease_cases")
                 .unwrap()
                 .iter()
                 .all(|v| v.is_nan())
         );
+    }
+
+    /// 2020 has an ISO week 53: weekly labels follow the calendar, as `Period::succ` does.
+    #[test]
+    fn weekly_labels_include_iso_week_53() {
+        let spec = Spec {
+            num_locations: 1,
+            num_periods: 54,
+            resolution: Resolution::Weekly,
+            ..Spec::default()
+        };
+        let df = Generator::new(Some(3)).training_data(&spec).unwrap();
+        let tp = df.column("time_period").unwrap();
+        let label = |r| tp.str_at(r).unwrap();
+        assert_eq!(label(0), "2020-W01");
+        assert_eq!(label(52), "2020-W53");
+        assert_eq!(label(53), "2021-W01");
+        for r in 1..df.n_rows() {
+            assert_eq!(
+                Period::parse(label(r - 1)).unwrap().succ(),
+                Period::parse(label(r))
+            );
+        }
     }
 
     #[test]

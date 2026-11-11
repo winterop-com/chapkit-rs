@@ -13,7 +13,9 @@ baseline-seasonal-median serve
 
 Then open <http://127.0.0.1:8000/ui/>. `/` redirects there (Python chapkit serves its console at `/`;
 nothing in the chapkit API uses it). With API keys set (`SERVICEKIT_API_KEYS`), the UI's files are open
-like `/docs`, but its API calls need a key.
+like `/docs`, but its API calls need a key: the first refused call asks for it, and the account menu
+sets, changes or forgets it. The UI sends it as `X-API-Key` on every call, downloads included, keeps it
+for the browser tab (session storage) and never puts it in a link.
 
 The UI is React on [sokkel-ui](https://github.com/winterop-com/sokkel-ui), in `ui/`. `bun run build` there
 writes `crates/chapkit-ui/dist/`, which is compiled into the binary (rust-embed): no files beside it, no
@@ -33,10 +35,10 @@ it uses these chapkit-rs extensions:
 | `POST /api/v1/datasets` | Store a dataset: JSON `{name, data, target?}`, or a CSV or JSON `file` as `multipart/form-data` (with `name`, `target`) |
 | `GET /api/v1/datasets` | List datasets (paged with `page` and `size`, like configs) |
 | `GET`, `DELETE /api/v1/datasets/{id}` | A dataset's description; delete it |
-| `GET /api/v1/datasets/{id}/$data` | The data as stored, chapkit DataFrame JSON; `?location=A&location=B` for some locations |
+| `GET /api/v1/datasets/{id}/$data` | The data as stored, chapkit DataFrame JSON; or a projection: `location` and `column` (repeatable) for some locations and columns, `before` and `last` for the last periods before one, `canonical=true` for the periods as chapkit writes them, in period order |
 | `POST /api/v1/ml/$backtest` | A backtest of `data` or a stored `dataset_id` |
 | `POST /api/v1/ml/$forecast` | A forecast past the end of the dataset |
-| `GET /api/v1/artifacts?type=ml_backtest` | Artifacts of one `data.type` |
+| `GET /api/v1/artifacts?type=ml_backtest&order=desc` | Artifacts of one `data.type`, newest first with `order=desc` (paged with `page` and `size`); backtests and forecasts carry `data.summary` in place of their content |
 
 **Datasets** are stored as given, after a check: `time_period` in any form chap-core reads (`2024-01`,
 `2024W01`, chap-core's CSV week ranges `2024-01-01/2024-01-07`), a `location` on every row, no location
@@ -52,8 +54,14 @@ another). The description:
  "covariates": ["rainfall", "mean_temperature", "population"]}
 ```
 
-`first_period` and `last_period` are written as chapkit writes periods (`2024-01`, `2024W01`), as are the
-periods of backtest and forecast results; `$data` returns the periods as uploaded.
+`first_period` and `last_period` are written as chapkit writes periods (`2024-01`, `2024W01`,
+`2024SunW01` for a week starting on Sunday), as are the periods of backtest and forecast results;
+`$data` returns the periods as uploaded unless asked for `canonical=true`. The UI asks for that and
+never reads a period itself: a chart history of a forecast is one call,
+`$data?location=A&location=B&column=cases&before=2024-07&last=12&canonical=true`.
+
+`/api/v1/info` also says `max_body_bytes`, the largest request the service takes
+(`CHAPKIT_MAX_BODY_MB`), so the upload dialog refuses a larger file before sending it.
 
 **`$backtest`** takes `dataset_id` in place of `data`. Its result (the `<bin> eval --json` document) then
 carries `dataset_id`, and always `forecasts`: every forecast of every split with the observed target
@@ -89,7 +97,8 @@ forecast, in the light and the dark scheme.
 ![Overview, light](ui/overview-light.png)
 ![Overview, dark](ui/overview-dark.png)
 
-**Datasets**: upload a CSV or JSON file by the picker or by dropping it on the page.
+**Datasets**: upload a CSV or JSON file by the picker or by dropping it on the page, naming its target
+column (`disease_cases` by default).
 
 ![Datasets, light](ui/datasets-light.png)
 ![Datasets, dark](ui/datasets-dark.png)

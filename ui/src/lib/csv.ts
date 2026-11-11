@@ -1,3 +1,5 @@
+import { saveBlob } from '../api/client'
+
 /** Reads CSV text into its header and rows of cells: quoted fields, doubled quotes, CRLF. */
 export function parseCsv(text: string): { header: string[]; rows: string[][] } {
     const rows: string[][] = []
@@ -32,23 +34,26 @@ export function parseCsv(text: string): { header: string[]; rows: string[][] } {
     return { header, rows: rest }
 }
 
+/**
+ * A cell as a spreadsheet must not read it as a formula: text starting with `=`, `+`, `-`, `@`, a
+ * tab or a carriage return gets a leading `'` (OWASP's CSV injection advice). Numbers stay numbers.
+ */
+export function inert(value: unknown): string {
+    if (value === null || value === undefined) return ''
+    const text = String(value)
+    return typeof value === 'string' && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+}
+
 const quote = (value: unknown) => {
-    const text = value === null || value === undefined ? '' : String(value)
+    const text = inert(value)
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
-/** Writes rows of records as CSV, the columns in the order given. */
+/** Writes rows of records as CSV for a spreadsheet, the columns in the order given; see `inert`. */
 export function toCsv<T extends object>(rows: readonly T[], columns: readonly (keyof T & string)[]): string {
-    const lines = [columns.join(','), ...rows.map((row) => columns.map((column) => quote(row[column])).join(','))]
+    const lines = [columns.map(quote).join(','), ...rows.map((row) => columns.map((column) => quote(row[column])).join(','))]
     return `${lines.join('\n')}\n`
 }
 
 /** Hands the reader a file made in the page. */
-export function saveFile(name: string, text: string, type = 'text/csv'): void {
-    const url = URL.createObjectURL(new Blob([text], { type }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
+export const saveFile = (name: string, text: string, type = 'text/csv'): void => saveBlob(name, new Blob([text], { type }))

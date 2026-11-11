@@ -11,12 +11,15 @@ import { StatusItem, StatusLine } from '@winterop-com/sokkel-ui/StatusLine'
 import { TopBar, type Crumb } from '@winterop-com/sokkel-ui/TopBar'
 import { Badge } from '@winterop-com/sokkel-ui/primitives/badge'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
+import { DialogShell } from '@winterop-com/sokkel-ui/DialogShell'
+import { SecretField } from '@winterop-com/sokkel-ui/SecretField'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@winterop-com/sokkel-ui/primitives/empty'
-import { Boxes, Braces, Database, Gauge, LayoutDashboard, ListChecks, Server, SlidersHorizontal, TrendingUp } from 'lucide-react'
-import { createContext, lazy, Suspense, useContext, useMemo, type ReactNode } from 'react'
+import { Boxes, Braces, Database, Gauge, KeyRound, LayoutDashboard, ListChecks, Server, SlidersHorizontal, TrendingUp } from 'lucide-react'
+import { createContext, Fragment, lazy, Suspense, useContext, useMemo, useState, type ReactNode } from 'react'
 
 import { api } from './api/client'
 import type { Health, Info } from './api/types'
+import { dismissKeyRequest, setApiKey, useApiKey } from './lib/apikey'
 import { useResource } from './lib/resource'
 import { go, useRoute } from './lib/router'
 
@@ -60,6 +63,61 @@ function Mark() {
     )
 }
 
+/**
+ * Asks for the service's API key, sent as `X-API-Key` on every request: opened when the service
+ * refuses a request for want of one, or from the account menu.
+ */
+function ApiKeyDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+    const { key, wanted } = useApiKey()
+    const [typed, setTyped] = useState<string>()
+    const close = () => {
+        setTyped(undefined)
+        dismissKeyRequest()
+        onClose()
+    }
+    return (
+        <DialogShell
+            open={open}
+            onOpenChange={(next) => !next && close()}
+            title="API key"
+            description="This service takes requests with an API key (X-API-Key). It is kept for this tab only and never put in a link."
+            confirm={{
+                label: 'Use this key',
+                why: typed === undefined || typed.trim() === '' ? 'Type the key first' : undefined,
+                onConfirm: () => {
+                    setApiKey(typed)
+                    setTyped(undefined)
+                    onClose()
+                },
+            }}
+            actions={
+                key !== undefined ? (
+                    <Button
+                        variant="ghost"
+                        onClick={() => {
+                            setApiKey(undefined)
+                            close()
+                        }}
+                    >
+                        Forget the key
+                    </Button>
+                ) : undefined
+            }
+        >
+            <SecretField
+                id="api-key"
+                label="API key"
+                mono
+                sealed={key !== undefined}
+                defaultReplacing={wanted}
+                value={typed}
+                onChange={setTyped}
+                error={wanted && key !== undefined ? 'The service refused this key.' : wanted ? 'The service asks for a key.' : undefined}
+            />
+        </DialogShell>
+    )
+}
+
 function healthNote(health: Health | undefined, failed: boolean): { note: string; tone?: 'warn' | 'error' } {
     if (failed) return { note: 'Service not answering', tone: 'error' }
     if (health === undefined) return { note: 'Connecting' }
@@ -73,9 +131,12 @@ export function App() {
     const route = useRoute()
     const [first = 'overview', second] = route
     const page = PLACES.some((place) => place.id === first) ? first : 'missing'
-    const info = useResource(api.info, [])
-    const health = useResource(api.health, [], 15_000)
-    const jobs = useResource(api.jobs, [], 5_000)
+    const credentials = useApiKey()
+    const [askingKey, setAskingKey] = useState(false)
+    // A new key reads everything again: the app's own reads by their deps, the page by remounting.
+    const info = useResource(api.info, [credentials.version])
+    const health = useResource(api.health, [credentials.version], 15_000)
+    const jobs = useResource(api.jobs, [credentials.version], 5_000)
     const running = (jobs.data ?? []).filter((job) => job.status === 'running' || job.status === 'pending').length
 
     const groups: RailGroup[] = useMemo(() => {
@@ -141,7 +202,7 @@ export function App() {
                 palette={palette}
                 route={route.join('/')}
                 banner={
-                    info.error !== undefined ? (
+                    info.error !== undefined && info.error.status !== 401 ? (
                         <Banner tone="critical" actions={<Button size="xs" variant="outline" onClick={info.reload}>Try again</Button>}>
                             The model service does not answer: {info.error.message}.
                         </Banner>
@@ -160,6 +221,7 @@ export function App() {
                                 where={model?.id}
                                 scheme={settings.scheme}
                                 onSchemeChange={(scheme) => setSettings({ ...settings, scheme })}
+                                extra={[{ id: 'api-key', label: credentials.key === undefined ? 'Set API key' : 'Change API key', icon: KeyRound, onSelect: () => setAskingKey(true) }]}
                             />
                         }
                     />
@@ -192,9 +254,13 @@ export function App() {
                 }
             >
                 <Page>
-                    <Suspense fallback={null}>{content}</Suspense>
+                    {/* A page per route and key: what it read for one resource never shows under another. */}
+                    <Suspense fallback={null}>
+                        <Fragment key={`${credentials.version}:${route.join('/')}`}>{content}</Fragment>
+                    </Suspense>
                 </Page>
             </Shell>
+            <ApiKeyDialog open={askingKey || credentials.wanted} onClose={() => setAskingKey(false)} />
         </ModelContext.Provider>
     )
 }

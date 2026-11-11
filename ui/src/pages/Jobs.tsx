@@ -1,6 +1,5 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
-import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { Segmented } from '@winterop-com/sokkel-ui/Segmented'
 import { StatusChip } from '@winterop-com/sokkel-ui/StatusChip'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
@@ -11,6 +10,7 @@ import { api } from '../api/client'
 import type { Job } from '../api/types'
 import { dateOf, took, when } from '../lib/format'
 import { useResource } from '../lib/resource'
+import { ReadProblem } from '../parts'
 
 const LIVE = new Set(['pending', 'running', 'canceling'])
 
@@ -58,9 +58,9 @@ export function Jobs() {
                     </Button>
                 }
             />
-            {jobs.error ? (
-                <Problem title="Could not read the jobs" technical={jobs.error.message} />
-            ) : (
+            {/* A failed refresh keeps the jobs read before in view, under what failed. */}
+            <ReadProblem what="the jobs" resource={jobs} />
+            {(jobs.error === undefined || jobs.data !== undefined) && (
                 <DataTable
                     columns={COLUMNS}
                     rows={listed}

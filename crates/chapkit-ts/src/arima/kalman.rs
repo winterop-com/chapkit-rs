@@ -10,13 +10,19 @@ use serde::{Deserialize, Serialize};
 /// is where forecasts start (as R's `arima` leaves its `model`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StateSpace {
+    #[serde(with = "crate::serde_float::many")]
     pub phi: Vec<f64>,
     /// MA coefficients, zero-padded to `r - 1`.
+    #[serde(with = "crate::serde_float::many")]
     pub theta: Vec<f64>,
     /// The differencing polynomial (`Delta`), sign as in `makeARIMA`.
+    #[serde(with = "crate::serde_float::many")]
     pub delta: Vec<f64>,
+    #[serde(with = "crate::serde_float::many")]
     pub a: Vec<f64>,
+    #[serde(with = "crate::serde_float::many")]
     pub p: Vec<f64>,
+    #[serde(with = "crate::serde_float::many")]
     pub pn: Vec<f64>,
 }
 

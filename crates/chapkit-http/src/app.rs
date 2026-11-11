@@ -35,7 +35,8 @@ pub struct App {
 /// meant to be hit. `CHAPKIT_MAX_BODY_MB` overrides it.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1 << 30;
 
-fn max_body_from_env() -> usize {
+/// The request body limit `CHAPKIT_MAX_BODY_MB` sets, else [`DEFAULT_MAX_BODY_BYTES`].
+pub fn max_body_from_env() -> usize {
     std::env::var("CHAPKIT_MAX_BODY_MB")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())

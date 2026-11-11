@@ -241,18 +241,21 @@ async fn predict_splits(
     let (started_at, start) = (chapkit_http::time::job_now(), std::time::Instant::now());
     // The forecasts run at once, bounded like $predict-sync. Finished within the eager budget,
     // they are the answer; otherwise a job takes them over and stores them, like $predict.
+    // Dropping `run` (the job deleted, the caller gone) cancels the forecasts while they wait
+    // for a permit; once the model runs, its permit is held until it returns.
     let state = s.clone();
-    let mut run = tokio::spawn(async move {
-        let _permit = state
+    let mut run = AbortOnDrop(tokio::spawn(async move {
+        let permit = state
             .inner
             .sync_permits
-            .acquire()
+            .clone()
+            .acquire_owned()
             .await
             .map_err(|_| chapkit_http::JobError::runtime("shutting down"))?;
-        ml::predict_split_frames(&state, trained, config, splits, req.geo).await
-    });
+        ml::predict_split_frames(&state, trained, config, splits, req.geo, permit).await
+    }));
     if !s.inner.eager_wait.is_zero()
-        && let Ok(joined) = tokio::time::timeout(s.inner.eager_wait, &mut run).await
+        && let Ok(joined) = tokio::time::timeout(s.inner.eager_wait, &mut run.0).await
     {
         let predictions = joined
             .map_err(|_| Problem::internal())?
@@ -267,7 +270,7 @@ async fn predict_splits(
     let prediction_id = chapkit_http::ids::new_id().to_string();
     let (state, id) = (s.clone(), prediction_id.clone());
     let work = Box::pin(async move {
-        let frames = run
+        let frames = (&mut run.0)
             .await
             .map_err(|_| chapkit_http::JobError::runtime("the forecasts panicked"))??;
         ml::store_split_predictions(
@@ -291,6 +294,15 @@ async fn predict_splits(
         }),
     )
         .into_response())
+}
+
+/// A task aborted when dropped.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Explain one forecast cell with LIME or KernelSHAP, computed in-process: every
@@ -474,6 +486,9 @@ async fn hpo(
     ))
 }
 
+/// The most cells (rows times columns) `$generate-sample-data` makes, about 200 MB of JSON.
+const MAX_SAMPLE_CELLS: usize = 20_000_000;
+
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 struct SampleParams {
     /// `train` (default) or `predict`.
@@ -501,7 +516,7 @@ async fn generate_sample_data(
     State(s): State<AppState>,
     chapkit_http::Query(p): chapkit_http::Query<SampleParams>,
 ) -> ApiResult<axum::Json<serde_json::Value>> {
-    use chapkit_core::synth::{Generator, Resolution, Spec};
+    use chapkit_core::synth::{Resolution, Spec};
     let info = s.model().info();
     let mut config_covariates = Vec::new();
     if let Some(cid) = &p.config_id {
@@ -545,39 +560,89 @@ async fn generate_sample_data(
         start_year: 2020,
     };
     let seed = p.seed.filter(|s| *s >= 0).map(i64::cast_unsigned);
-    let mut generator = Generator::new(seed);
     let want_geo = p.include_geo.unwrap_or(info.requires_geo);
-    let geo = want_geo
-        .then(|| Generator::geo(spec.num_locations, p.geo_type.as_deref() == Some("point")));
-    let gen_err = |e: chapkit_core::Error| Problem::bad_request(e.to_string());
-    let mut payload = match p.kind.as_deref().unwrap_or("train") {
+    let points = p.geo_type.as_deref() == Some("point");
+    let kind = p.kind.unwrap_or_else(|| "train".into());
+    // Rows the payload holds: the predict payload has the history and the future.
+    let periods = match kind.as_str() {
         "predict" => {
             let lower = info.min_prediction_periods.max(1) as usize;
             let upper = (info.max_prediction_periods as usize).max(lower);
             spec.num_periods = num_periods.clamp(lower, upper);
-            let (historic, future) = generator
-                .prediction_data(&spec, num_periods)
-                .map_err(gen_err)?;
-            serde_json::json!({"historic": historic, "future": future})
+            num_periods + spec.num_periods
         }
-        "train" => {
-            let data = generator.training_data(&spec).map_err(gen_err)?;
-            let mut v = serde_json::json!({"data": data});
-            if let Some(cid) = &p.config_id {
-                v["config_id"] = serde_json::json!(cid);
-            }
-            v
-        }
+        "train" => num_periods,
         other => {
             return Err(Problem::bad_request(format!(
                 "kind must be 'train' or 'predict', got '{other}'"
             )));
         }
     };
-    if let Some(g) = geo {
-        payload["geo"] = g;
+    let columns =
+        6 + spec.num_features + spec.required_covariates.len() + spec.additional_covariates.len();
+    let cells = spec
+        .num_locations
+        .saturating_mul(periods)
+        .saturating_mul(columns);
+    if cells > MAX_SAMPLE_CELLS {
+        return Err(Problem::bad_request(format!(
+            "the sample would have {cells} cells (locations x periods x columns), more than the \
+             limit of {MAX_SAMPLE_CELLS}; ask for fewer locations, periods or features"
+        )));
     }
+    // Generated and serialized on a blocking thread, bounded like $predict-sync.
+    let _permit = s
+        .inner
+        .sync_permits
+        .acquire()
+        .await
+        .map_err(|_| Problem::internal())?;
+    let config_id = p.config_id;
+    let payload = tokio::task::spawn_blocking(move || {
+        sample_payload(
+            &spec,
+            &kind,
+            num_periods,
+            seed,
+            config_id.as_deref(),
+            want_geo.then_some(points),
+        )
+    })
+    .await
+    .map_err(|_| Problem::internal())??;
     Ok(axum::Json(payload))
+}
+
+/// A `$generate-sample-data` payload: `predict` gives `num_periods` historic periods and
+/// `spec.num_periods` future ones; `geo` asks for a grid (`Some(true)` of points).
+fn sample_payload(
+    spec: &chapkit_core::synth::Spec,
+    kind: &str,
+    num_periods: usize,
+    seed: Option<u64>,
+    config_id: Option<&str>,
+    geo: Option<bool>,
+) -> ApiResult<serde_json::Value> {
+    use chapkit_core::synth::Generator;
+    let mut generator = Generator::new(seed);
+    let gen_err = |e: chapkit_core::Error| Problem::bad_request(e.to_string());
+    let mut payload = if kind == "predict" {
+        let (historic, future) = generator
+            .prediction_data(spec, num_periods)
+            .map_err(gen_err)?;
+        serde_json::json!({"historic": historic, "future": future})
+    } else {
+        let data = generator.training_data(spec).map_err(gen_err)?;
+        let mut v = serde_json::json!({"data": data});
+        if let Some(cid) = config_id {
+            v["config_id"] = serde_json::json!(cid);
+        }
+        v
+    };
+    if let Some(points) = geo {
+        payload["geo"] = Generator::geo(spec.num_locations, points);
+    }
+    Ok(payload)
 }
 
 /// Run the model's `validate_train` / `validate_predict` on a blocking thread: they are model code,

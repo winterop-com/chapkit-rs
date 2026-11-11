@@ -30,6 +30,7 @@
 pub mod arima;
 mod optim;
 pub mod poly;
+mod serde_float;
 pub mod statsmodels;
 pub mod stl;
 pub mod unitroot;

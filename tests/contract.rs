@@ -766,6 +766,9 @@ async fn review_regressions() {
     let (s, body) = train_model(&small, &big).await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
     assert_eq!(body["type"], "urn:servicekit:error:payload-too-large");
+    // The limit is in the info, so a client can refuse a larger file before sending it.
+    let (_, info, _) = call(&small, "GET", "/api/v1/info", None).await;
+    assert_eq!(info["max_body_bytes"], 1024);
 
     // $validate: a prediction without artifact_id is not valid.
     let (s, v, _) = call(
@@ -2005,6 +2008,170 @@ async fn forecast_job_stores_the_forecast_ahead() {
     assert_eq!(none, json!([]));
     let (_, all, _) = call(&app, "GET", "/api/v1/artifacts", None).await;
     assert_eq!(all.as_array().unwrap().len(), 2);
+
+    // Newest first, a page at a time, each with a summary in place of its content.
+    let (_, newest, _) = call(
+        &app,
+        "GET",
+        "/api/v1/artifacts?type=ml_forecast&order=desc",
+        None,
+    )
+    .await;
+    let ids = |list: &Value| -> Vec<Value> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].clone())
+            .collect()
+    };
+    let mut oldest = ids(&forecasts);
+    oldest.reverse();
+    assert_eq!(ids(&newest), oldest);
+    let summary = &newest[0]["data"]["summary"];
+    assert_eq!(
+        summary,
+        &json!({"dataset_id": null, "periods": 2, "weather": "damped_persistence",
+            "first_period": result["forecasts"][0]["time_period"], "locations": 2})
+    );
+    for (page, expected) in [(1, &oldest[0]), (2, &oldest[1])] {
+        let uri = format!("/api/v1/artifacts?type=ml_forecast&order=desc&page={page}&size=1");
+        let (_, got, _) = call(&app, "GET", &uri, None).await;
+        assert_eq!(got["total"], 2);
+        assert_eq!(ids(&got["items"]), std::slice::from_ref(expected));
+    }
+    let uri = "/api/v1/artifacts?type=ml_forecast&order=desc&page=3&size=1";
+    assert_eq!(call(&app, "GET", uri, None).await.1["items"], json!([]));
+    let uri = "/api/v1/artifacts?order=sideways";
+    assert_eq!(
+        call(&app, "GET", uri, None).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+/// A backtest is listed with its dataset, data, options and scores, not its forecasts.
+#[tokio::test]
+async fn backtests_are_listed_with_a_summary() {
+    let app = app().await;
+    let body = json!({"data": backtest_data(), "periods": 2, "splits": 2});
+    let (_, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let (_, list, _) = call(&app, "GET", "/api/v1/artifacts?type=ml_backtest", None).await;
+    let summary = &list[0]["data"]["summary"];
+    assert_eq!(
+        summary.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["aggregate", "data", "options"]
+    );
+    assert_eq!(
+        (&summary["data"]["first"], &summary["data"]["last"]),
+        (&json!("2022-01"), &json!("2023-12"))
+    );
+    assert!(summary["aggregate"]["crps"].is_number());
+    assert!(list[0]["data"].get("content").is_none());
+}
+
+/// `$data` projects a stored dataset: locations, columns, a window of periods, and the periods as
+/// chapkit writes them, from every form a dataset takes.
+#[tokio::test]
+async fn dataset_data_is_projected_with_canonical_periods() {
+    let app = app().await;
+    let store = |rows: Value| {
+        let app = app.clone();
+        async move {
+            let body = json!({"name": "forms", "data": {
+                "columns": ["time_period", "location", "disease_cases", "rainfall"], "data": rows}});
+            let (s, d, _) = call(&app, "POST", "/api/v1/datasets", Some(body)).await;
+            assert_eq!(s, StatusCode::CREATED, "{d}");
+            d["id"].as_str().unwrap().to_owned()
+        }
+    };
+    let get = |id: String, query: &'static str| {
+        let app = app.clone();
+        async move {
+            let uri = format!("/api/v1/datasets/{id}/$data?{query}");
+            call(&app, "GET", &uri, None).await
+        }
+    };
+    let periods = |frame: &Value| -> Vec<String> {
+        frame["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[0].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // Months in every form, out of order: 2024-9 sorts before 2024-10.
+    let months = store(json!([
+        ["2024-10", "A", 3, 1.0],
+        ["202411", "A", 4, 1.0],
+        ["2024-9", "A", 2, 1.0],
+        [" 2024-12 ", "A", 5, 1.0],
+        ["2024-08", "A", 1, 1.0],
+        ["2024-9", "B", 7, 1.0]
+    ]))
+    .await;
+    let (s, all, _) = get(months.clone(), "canonical=true&location=A").await;
+    assert_eq!(s, StatusCode::OK, "{all}");
+    assert_eq!(
+        periods(&all),
+        ["2024-08", "2024-09", "2024-10", "2024-11", "2024-12"]
+    );
+    let (_, window, _) = get(
+        months.clone(),
+        "canonical=true&before=2024-11&last=2&column=disease_cases&location=A&location=B",
+    )
+    .await;
+    assert_eq!(
+        window["columns"],
+        json!(["time_period", "location", "disease_cases"])
+    );
+    assert_eq!(
+        window["data"],
+        json!([
+            ["2024-09", "A", 2],
+            ["2024-09", "B", 7],
+            ["2024-10", "A", 3]
+        ])
+    );
+    // Without canonical the periods stay as given.
+    let (_, raw, _) = get(months.clone(), "before=2024-10&location=A").await;
+    assert_eq!(periods(&raw), ["2024-9", "2024-08"]);
+
+    // Weeks: Monday weeks in their forms, and Sunday weeks keep being Sunday weeks.
+    let monday = store(json!([
+        ["2024-W03", "A", 1, 1.0],
+        ["2024W4", "A", 2, 1.0],
+        ["2024-01-01/2024-01-07", "A", 3, 1.0],
+        ["2024 W02", "A", 4, 1.0]
+    ]))
+    .await;
+    let (_, w, _) = get(monday, "canonical=true").await;
+    assert_eq!(periods(&w), ["2024W01", "2024W02", "2024W03", "2024W04"]);
+    let sunday = store(json!([
+        ["2019-01-13/2019-01-19", "A", 2, 1.0],
+        ["2019-01-06/2019-01-12", "A", 1, 1.0],
+        ["2019-S03", "A", 3, 1.0],
+        ["2019SunW4", "A", 4, 1.0]
+    ]))
+    .await;
+    let (_, w, _) = get(sunday.clone(), "canonical=true").await;
+    assert_eq!(
+        periods(&w),
+        ["2019SunW01", "2019SunW02", "2019SunW03", "2019SunW04"]
+    );
+    let (_, w, _) = get(sunday, "canonical=true&before=2019SunW03&last=1").await;
+    assert_eq!(periods(&w), ["2019SunW02"]);
+
+    for query in [
+        "before=June",
+        "last=0",
+        "last=x",
+        "column=nope",
+        "canonical=maybe",
+    ] {
+        let (s, p, _) = get(months.clone(), query).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{query}: {p}");
+    }
 }
 
 #[tokio::test]
@@ -2045,5 +2212,139 @@ async fn ui_is_served_and_the_root_redirects_to_it() {
     assert_eq!(
         get(app, "/api/v1/datasets").await.status(),
         StatusCode::UNAUTHORIZED
+    );
+}
+
+/// The sample's size is bounded as a whole, not only per dimension, before anything is generated.
+#[tokio::test]
+async fn sample_data_is_bounded() {
+    let app = app().await;
+    let (s, p, _) = call(
+        &app,
+        "GET",
+        "/api/v1/ml/$generate-sample-data?num_locations=10000&num_periods=10000&num_features=100",
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+    assert!(p["detail"].as_str().unwrap().contains("limit"), "{p}");
+    let (s, p, _) = call(
+        &app,
+        "GET",
+        "/api/v1/ml/$generate-sample-data?kind=predict&num_locations=3&num_periods=12",
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+}
+
+static GATE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static GATE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Counts its forecasts, each waiting until the gate opens.
+struct Gate;
+
+impl Model for Gate {
+    type Config = chapkit::NoConfig;
+    type Trained = ();
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo::default()
+    }
+
+    fn train(&self, _: &chapkit::NoConfig, _: TrainInput<'_>) -> ModelResult<()> {
+        Ok(())
+    }
+
+    fn predict(
+        &self,
+        (): &(),
+        _: &chapkit::NoConfig,
+        input: PredictInput<'_>,
+    ) -> ModelResult<DataFrame> {
+        use std::sync::atomic::Ordering;
+        GATE_CALLS.fetch_add(1, Ordering::SeqCst);
+        while !GATE_OPEN.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        prediction_frame(input.future, 1, |_, _| Ok(()))
+    }
+}
+
+/// Deleting a `$predict-splits` job still waiting for a permit cancels its forecasts.
+#[tokio::test]
+async fn deleting_a_pending_predict_splits_job_cancels_it() {
+    use std::sync::atomic::Ordering;
+    let app = chapkit::Service::new("gate", "Gate", Gate)
+        .database(":memory:")
+        .eager_wait(std::time::Duration::ZERO)
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let (_, cfg, _) = call(
+        &app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": "gate", "data": {}})),
+    )
+    .await;
+    let (_, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$train",
+        Some(json!({"config_id": cfg["id"], "data": backtest_data()})),
+    )
+    .await;
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let model_id = sub["artifact_id"].as_str().unwrap().to_owned();
+    let (_, splits) = splits_input(&["2023-06"]);
+    let (h, f) = splits[0].clone();
+
+    // Every permit taken by a $predict-sync call held at the gate.
+    let permits = std::env::var("CHAPKIT_SYNC_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from))
+        .max(1);
+    let body = json!({"artifact_id": model_id, "historic": h, "future": f});
+    let held: Vec<_> = (0..permits)
+        .map(|_| {
+            let (app, body) = (app.clone(), body.clone());
+            tokio::spawn(
+                async move { call(&app, "POST", "/api/v1/ml/$predict-sync", Some(body)).await },
+            )
+        })
+        .collect();
+    for _ in 0..2000 {
+        if GATE_CALLS.load(Ordering::SeqCst) == permits {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(GATE_CALLS.load(Ordering::SeqCst), permits);
+
+    let (s, job, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$predict-splits",
+        Some(json!({"artifact_id": model_id, "splits": [{"historic": h, "future": f}]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{job}");
+    let uri = format!("/api/v1/jobs/{}", job["job_id"].as_str().unwrap());
+    let (s, _, _) = call(&app, "DELETE", &uri, None).await;
+    assert!(s.is_success(), "{s}");
+
+    GATE_OPEN.store(true, Ordering::SeqCst);
+    for h in held {
+        assert_eq!(h.await.unwrap().0, StatusCode::OK);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        GATE_CALLS.load(Ordering::SeqCst),
+        permits,
+        "the deleted job ran"
     );
 }

@@ -19,6 +19,7 @@ const STATUSES = {
     healthy: { color: 'good' as const },
     degraded: { color: 'warning' as const },
     unhealthy: { color: 'critical' as const },
+    unreachable: { color: 'critical' as const },
     green: { color: 'good' as const },
     yellow: { color: 'warning' as const },
     orange: { color: 'warning' as const },

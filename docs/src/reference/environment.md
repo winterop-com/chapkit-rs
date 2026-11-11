@@ -12,6 +12,7 @@ variable over a value set in the model's code ([command line](cli.md#a-model-bin
 | `CHAPKIT_EAGER_WAIT_MS` | `1000` | how long `$train`/`$predict` wait for a job before replying 202 |
 | `CHAPKIT_MAX_CONCURRENCY` | `1` | jobs running at once |
 | `CHAPKIT_MAX_BODY_MB` | `1024` | largest accepted request body; larger bodies get a 413 problem |
+| `CHAPKIT_MAX_PREDICTION_CELLS` | `250000000` | largest forecast a model builds with `prediction_frame` or `predict_by_location` (future rows x samples, about 8 bytes each); a larger one is refused as invalid input before it is allocated (the call fails with a 400, the job with a `ValueError`) |
 | `CHAPKIT_SYNC_CONCURRENCY` | number of cores | `$predict-sync` and `$explain` calls running at once |
 | `SERVICEKIT_ORCHESTRATOR_URL` | unset | register with chap-core at this URL (`.../v2/services/$register`) |
 | `SERVICEKIT_HOST` | host name | host chap-core should call back on |

@@ -37,7 +37,8 @@ impl Service {
     /// A service for `model`. `id` must be a slug (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`).
     ///
     /// Defaults read from the environment: `DATABASE_URL` (in-memory when unset),
-    /// `CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1), `CHAPKIT_MAX_BODY_MB` (1024).
+    /// `CHAPKIT_EAGER_WAIT_MS` (1000), `CHAPKIT_MAX_CONCURRENCY` (1), `CHAPKIT_MAX_BODY_MB` (1024),
+    /// and `CHAPKIT_MAX_PREDICTION_CELLS` ([`chapkit_core::max_prediction_cells`], for the process).
     pub fn new<M: Model>(id: impl Into<String>, display_name: impl Into<String>, model: M) -> Self {
         let env_u64 = |k: &str, d: u64| {
             std::env::var(k)
@@ -45,6 +46,12 @@ impl Service {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d)
         };
+        if let Some(cells) = std::env::var("CHAPKIT_MAX_PREDICTION_CELLS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            chapkit_core::set_max_prediction_cells(cells);
+        }
         Self {
             id: id.into(),
             display_name: display_name.into(),
@@ -134,6 +141,8 @@ impl Service {
             "chapkit_version": format!("{CHAPKIT_API_VERSION}+chapkit-rs.{}", env!("CARGO_PKG_VERSION")),
             "chapkit_rs_version": env!("CARGO_PKG_VERSION"),
             "servicekit_version": null,
+            // The largest request body taken, so a client can refuse a larger upload before sending it.
+            "max_body_bytes": self.max_body_bytes.unwrap_or_else(chapkit_http::max_body_from_env),
             "extensions": ["$predict-sync", "$predict-splits", "$explain", "$backtest", "$forecast", "$hpo", "datasets"],
         })
     }
@@ -334,6 +343,16 @@ mod tests {
             String::from_utf8_lossy(&out.stdout)
         );
         false
+    }
+
+    #[test]
+    fn prediction_cells_come_from_the_environment() {
+        let test = "service::tests::prediction_cells_come_from_the_environment";
+        if !in_child(test, &[("CHAPKIT_MAX_PREDICTION_CELLS", "10")]) {
+            return;
+        }
+        let _ = Service::new("nop", "Nop", Nop);
+        assert_eq!(chapkit_core::max_prediction_cells(), 10);
     }
 
     #[test]

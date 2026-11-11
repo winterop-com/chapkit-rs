@@ -27,7 +27,7 @@ pub(crate) struct Inner {
     pub version: String,
     pub eager_wait: Duration,
     /// Bounds concurrent synchronous model calls (`$predict-sync`) to the CPU budget.
-    pub sync_permits: tokio::sync::Semaphore,
+    pub sync_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -50,7 +50,7 @@ impl AppState {
                 service_id,
                 version,
                 eager_wait,
-                sync_permits: tokio::sync::Semaphore::new(sync_concurrency()),
+                sync_permits: Arc::new(tokio::sync::Semaphore::new(sync_concurrency())),
             }),
         }
     }

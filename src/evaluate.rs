@@ -1,7 +1,7 @@
 //! A backtest of the service's model with its result as JSON: shared by `<bin> eval`, `<bin> hpo`,
 //! `$backtest` and `$hpo`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use chapkit_core::{DataFrame, Period, PredictInput, RunInfo, TrainInput, cols};
@@ -69,6 +69,7 @@ pub struct DataReport {
     pub periods: usize,
     /// `months` or `weeks`.
     pub unit: &'static str,
+    /// First and last period, as chapkit writes periods (`2024-01`, `2024W03`).
     pub first: Option<String>,
     pub last: Option<String>,
     pub rows: usize,
@@ -135,15 +136,10 @@ pub(crate) fn describe(data: &DataFrame, source: String) -> Result<DataReport, S
         .map_err(|e| e.to_string())?
         .len();
     let tp = data.require(cols::TIME_PERIOD).map_err(|e| e.to_string())?;
-    let mut periods: BTreeMap<Period, String> = BTreeMap::new();
-    for row in 0..data.n_rows() {
-        if let Some(s) = tp.str_at(row)
-            && let Some(p) = Period::parse(s)
-        {
-            periods.entry(p).or_insert_with(|| s.to_owned());
-        }
-    }
-    let unit = match periods.keys().next() {
+    let periods: BTreeSet<Period> = (0..data.n_rows())
+        .filter_map(|row| tp.str_at(row).and_then(Period::parse))
+        .collect();
+    let unit = match periods.first() {
         Some(Period::Week { .. }) => "weeks",
         _ => "months",
     };
@@ -152,8 +148,8 @@ pub(crate) fn describe(data: &DataFrame, source: String) -> Result<DataReport, S
         locations,
         periods: periods.len(),
         unit,
-        first: periods.values().next().cloned(),
-        last: periods.values().next_back().cloned(),
+        first: periods.first().map(Period::to_string),
+        last: periods.last().map(Period::to_string),
         rows: data.n_rows(),
         dropped: Vec::new(),
     })
@@ -161,19 +157,7 @@ pub(crate) fn describe(data: &DataFrame, source: String) -> Result<DataReport, S
 
 /// The run settings of a backtest with `config`.
 pub(crate) fn run_info(config: &Value, periods: usize) -> RunInfo {
-    RunInfo {
-        prediction_periods: u32::try_from(periods).unwrap_or(u32::MAX),
-        additional_continuous_covariates: config
-            .get("additional_continuous_covariates")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        future_covariate_origin: None,
-    }
+    RunInfo::for_config(u32::try_from(periods).unwrap_or(u32::MAX), config)
 }
 
 /// Backtest `model` with `config` (from [`backtest_config`]) on `data` and score it.

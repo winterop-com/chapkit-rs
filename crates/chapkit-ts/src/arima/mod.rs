@@ -87,20 +87,27 @@ pub struct Arima {
     pub spec: ArimaSpec,
     /// `ar1.., ma1.., sar1.., sma1..` and, with a constant, the constant's regression coefficient
     /// (fable's `model$coef`).
+    #[serde(with = "crate::serde_float::many")]
     pub coef: Vec<f64>,
     /// fable's `sigma2`: the sum of squared (standardised) residuals over `nstar - npar + 1`, with
     /// `nstar = n - d - D * period` and `npar` the estimated coefficients plus one.
+    #[serde(with = "crate::serde_float::one")]
     pub sigma2: f64,
+    #[serde(with = "crate::serde_float::one")]
     pub loglik: f64,
     /// AIC, AICc and BIC as fable computes them (`f64::INFINITY` when undefined).
+    #[serde(with = "crate::serde_float::one")]
     pub aic: f64,
+    #[serde(with = "crate::serde_float::one")]
     pub aicc: f64,
+    #[serde(with = "crate::serde_float::one")]
     pub bic: f64,
     /// The number of observations of the history.
     pub n: usize,
     /// R's `nobs`: the observations used, less the differencing.
     pub nobs: usize,
     /// The residuals (`y - fitted`), standardised innovations as R's `arima` returns them.
+    #[serde(with = "crate::serde_float::many")]
     pub residuals: Vec<f64>,
     pub method: Method,
     state: StateSpace,
@@ -109,7 +116,9 @@ pub struct Arima {
 /// Forecasts: the mean and the variance of each step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Forecast {
+    #[serde(with = "crate::serde_float::many")]
     pub mean: Vec<f64>,
+    #[serde(with = "crate::serde_float::many")]
     pub variance: Vec<f64>,
 }
 
@@ -295,6 +304,34 @@ impl Arima {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing observation gives a `NaN` residual; the model still goes through JSON (as a
+    /// checkpoint stores it) and forecasts the same after.
+    #[test]
+    fn missing_observations_survive_a_json_round_trip() {
+        let spec = ArimaSpec {
+            p: 0,
+            d: 0,
+            q: 0,
+            seasonal_p: 0,
+            seasonal_d: 0,
+            seasonal_q: 0,
+            period: 1,
+            constant: true,
+        };
+        let model = fit_arima(&[1.0, f64::NAN, 2.0, 3.0], &spec, Method::CssMl).unwrap();
+        assert!(model.residuals.iter().any(|r| r.is_nan()));
+        let text = serde_json::to_string(&serde_json::to_value(&model).unwrap()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back: Arima = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(&back).unwrap(),
+            serde_json::to_value(&model).unwrap()
+        );
+        assert_eq!(back.forecast(2).unwrap(), model.forecast(2).unwrap());
+        let nan = |v: &[f64]| v.iter().map(|x| x.is_nan()).collect::<Vec<_>>();
+        assert_eq!(nan(&back.residuals), nan(&model.residuals));
+    }
 
     #[test]
     fn constants() {

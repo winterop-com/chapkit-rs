@@ -64,9 +64,59 @@ struct ListParams {
     /// `ml_forecast`, ...). chapkit-rs extension.
     #[serde(rename = "type")]
     kind: Option<String>,
+    /// `asc` (oldest first, the default) or `desc` (newest first). chapkit-rs extension.
+    order: Option<String>,
 }
 
-/// List artifact summaries (`data` without `content`), optionally of one `type`.
+/// A small summary of a backtest's or forecast's content, for listing them without it:
+/// `dataset_id`, and for a backtest its `data`, `options` and `aggregate`, for a forecast its
+/// `periods`, `weather`, first period and number of locations. chapkit-rs extension.
+fn summary(data: &Value) -> Option<Value> {
+    let content = data.get("content")?;
+    let pick = |keys: &[&str]| -> serde_json::Map<String, Value> {
+        keys.iter()
+            .filter_map(|k| content.get(*k).map(|v| ((*k).to_owned(), v.clone())))
+            .collect()
+    };
+    match str_field(data, "type")? {
+        crate::analysis::BACKTEST_TYPE => Some(Value::Object(pick(&[
+            "dataset_id",
+            "data",
+            "options",
+            "aggregate",
+        ]))),
+        crate::analysis::FORECAST_TYPE => {
+            let mut out = pick(&["dataset_id", "periods", "weather"]);
+            let rows = content.get("forecasts").and_then(Value::as_array);
+            let first = rows
+                .and_then(|r| r.first())
+                .and_then(|r| r.get("time_period"))
+                .cloned();
+            let locations = rows.map(|r| {
+                r.iter()
+                    .filter_map(|row| row.get("location").and_then(Value::as_str))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+            });
+            out.insert("first_period".into(), first.unwrap_or(Value::Null));
+            out.insert("locations".into(), locations.into());
+            Some(Value::Object(out))
+        }
+        _ => None,
+    }
+}
+
+/// The artifact as listed: `data` without `content`, with its [`summary`] when it has one.
+fn listed(row: chapkit_store::ArtifactRow) -> ArtifactOut {
+    let mut data = without_content(&row.data);
+    if let (Some(summary), Value::Object(m)) = (summary(&row.data), &mut data) {
+        m.insert("summary".into(), summary);
+    }
+    ArtifactOut { data, ..row.into() }
+}
+
+/// List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest
+/// first. Backtests and forecasts carry `data.summary`, enough to list them without their content.
 #[utoipa::path(get, path = "", tag = "Artifacts", params(ListParams),
     responses((status = OK, body = ListOrPage<ArtifactOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
 async fn list(
@@ -78,22 +128,58 @@ async fn list(
         size: p.size,
     }
     .resolve()?;
+    let newest_first = match p.order.as_deref() {
+        None | Some("asc") => false,
+        Some("desc") => true,
+        Some(other) => {
+            return Err(Problem::validation(vec![serde_json::json!({
+                "loc": ["query", "order"],
+                "msg": format!("order {other:?} is not asc or desc"),
+                "type": "value_error"
+            })]));
+        }
+    };
+    let read = |page: Option<Page>| {
+        let store = s.store();
+        let kind = p.kind.clone();
+        async move {
+            match kind.as_deref() {
+                Some(kind) => store.list_artifacts_of_type(kind, page).await,
+                None => store.list_artifacts(page).await,
+            }
+            .map_err(store_problem)
+        }
+    };
     let page = paging.map(|(page, size)| Page {
         offset: chapkit_http::extract::page_offset(page, size),
         limit: size,
     });
-    let (rows, total) = match p.kind.as_deref() {
-        Some(kind) => s.store().list_artifacts_of_type(kind, page).await,
-        None => s.store().list_artifacts(page).await,
+    let (mut rows, total) = match page {
+        // Newest first: the same page counted from the end of the oldest-first order.
+        Some(Page { offset, limit }) if newest_first => {
+            let (_, total) = read(Some(Page {
+                offset: 0,
+                limit: 0,
+            }))
+            .await?;
+            let end = total.saturating_sub(offset);
+            let start = end.saturating_sub(limit);
+            if end == 0 {
+                (Vec::new(), total)
+            } else {
+                read(Some(Page {
+                    offset: start,
+                    limit: end - start,
+                }))
+                .await?
+            }
+        }
+        page => read(page).await?,
+    };
+    if newest_first {
+        rows.reverse();
     }
-    .map_err(store_problem)?;
-    let items: Vec<ArtifactOut> = rows
-        .into_iter()
-        .map(|r| ArtifactOut {
-            data: without_content(&r.data),
-            ..r.into()
-        })
-        .collect();
+    let items: Vec<ArtifactOut> = rows.into_iter().map(listed).collect();
     Ok(ListOrPage::new(items, total, paging))
 }
 

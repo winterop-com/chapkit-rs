@@ -1,1 +1,0 @@
-import{g as e}from"./kbd-Bxkha4hE.js";import{t}from"./loader-circle-D7-sHe_i.js";import{dr as n}from"./composite-BT6JZLMm.js";var r=n();function i({className:n,...i}){return(0,r.jsx)(t,{"data-slot":`spinner`,role:`status`,"aria-label":`Loading`,className:e(`size-4 animate-spin`,n),...i})}export{i as t};

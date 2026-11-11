@@ -17,7 +17,7 @@ pub mod sse;
 mod system;
 pub mod time;
 
-pub use app::{App, init_tracing};
+pub use app::{App, init_tracing, max_body_from_env};
 pub use extract::{Json, ListOrPage, PageParams, Paginated, Query, Stats, parse_ulid};
 pub use health::{CheckResult, HealthState};
 pub use jobs::{JobError, JobRecord, JobStatus, Scheduler};

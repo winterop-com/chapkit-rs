@@ -120,6 +120,20 @@ impl Period {
         }
     }
 
+    /// The period's position on its calendar, counted in its own unit: the periods from `a` to
+    /// `b` (both months, or both Monday weeks) number `b.ordinal() - a.ordinal() + 1`. `None` for
+    /// Sunday-start weeks, as [`Period::succ`].
+    pub fn ordinal(self) -> Option<i64> {
+        match self {
+            Period::Month { year, month } => Some(i64::from(year) * 12 + i64::from(month) - 1),
+            Period::Week { sunday: true, .. } => None,
+            // A Monday's day count is 7k - 3 (1970-01-01 was a Thursday).
+            Period::Week { year, week, .. } => {
+                Some((week1_monday(year) + 3).div_euclid(7) + i64::from(week) - 1)
+            }
+        }
+    }
+
     /// The next period: the next month, or the next ISO week (years have 52 or 53). `None` for
     /// Sunday-start weeks, whose year lengths are not implemented.
     pub fn succ(self) -> Option<Period> {
@@ -425,6 +439,19 @@ mod tests {
     fn period_of_year_pools_week_53() {
         assert_eq!(Period::parse("2020W53").unwrap().period_of_year(), 52);
         assert_eq!(Period::parse("2020-07").unwrap().period_of_year(), 7);
+    }
+
+    #[test]
+    fn ordinal_counts_periods() {
+        for start in ["2019-11", "2019W50"] {
+            let mut p = Period::parse(start).unwrap();
+            for _ in 0..200 {
+                let next = p.succ().unwrap();
+                assert_eq!(next.ordinal(), p.ordinal().map(|o| o + 1), "{p}");
+                p = next;
+            }
+        }
+        assert_eq!(Period::parse("2024SunW07").unwrap().ordinal(), None);
     }
 
     #[test]

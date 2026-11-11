@@ -377,9 +377,12 @@ pub(crate) async fn predict_split_frames(
     config: Value,
     splits: Vec<Split>,
     geo: Option<Geo>,
+    permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<Vec<DataFrame>, JobError> {
     let model = state.model().clone();
+    // The permit goes with the model calls: held until they return, even when the caller is gone.
     let frames = chapkit_http::jobs::blocking(move || {
+        let _permit = permit;
         splits
             .iter()
             .map(|s| {

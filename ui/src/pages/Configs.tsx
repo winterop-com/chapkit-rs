@@ -10,10 +10,11 @@ import { toast } from '@winterop-com/sokkel-ui/primitives/toast'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 
-import { api } from '../api/client'
+import { api, asApiError } from '../api/client'
 import type { Config } from '../api/types'
 import { dateOf, when } from '../lib/format'
 import { useResource } from '../lib/resource'
+import { ReadProblem } from '../parts'
 
 const said = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value))
 
@@ -48,7 +49,10 @@ function NewConfig({ schema, onClose, onSaved }: { schema: Record<string, unknow
                 toast.add({ type: 'success', title: `${name.trim()} saved` })
                 onSaved()
             })
-            .catch((failure: { message: string; detail?: string }) => setError({ title: failure.message, detail: failure.detail }))
+            .catch((failure: unknown) => {
+                const refused = asApiError(failure)
+                setError({ title: refused.message, detail: refused.detail })
+            })
             .finally(() => setBusy(false))
     }
     return (
@@ -92,13 +96,19 @@ export function Configs() {
                 count={configs.data?.length}
                 description="Named sets of the model's options, to evaluate and forecast with."
                 actions={
-                    <Button size="sm" onClick={() => setCreating(true)} disabled={schema.data === undefined}>
+                    <Button
+                        size="sm"
+                        onClick={() => setCreating(true)}
+                        disabled={schema.data === undefined}
+                        reason={schema.error !== undefined ? "Could not read the model's options" : schema.loading ? "Reading the model's options" : undefined}
+                    >
                         <Plus aria-hidden />
                         New config
                     </Button>
                 }
             />
-            <DataTable
+            <ReadProblem what="the model's options" resource={schema} tone="warning" />
+            {configs.error ? <ReadProblem what="the configs" resource={configs} /> : <DataTable
                 columns={COLUMNS}
                 rows={configs.data ?? []}
                 rowKey={(row) => row.id}
@@ -116,7 +126,7 @@ export function Configs() {
                 )}
                 rowActions={(row) => [{ id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) }]}
                 empty="No config yet. Evaluations and forecasts use the model defaults until you make one."
-            />
+            />}
             {creating && schema.data && (
                 <NewConfig
                     schema={schema.data}

@@ -41,12 +41,6 @@ function uptime(seconds: number): string {
     return `${(seconds / 86_400).toFixed(1)} days`
 }
 
-async function readMetrics(): Promise<string> {
-    const response = await fetch('/metrics')
-    if (!response.ok) throw new Error(`/metrics answered ${response.status}`)
-    return response.text()
-}
-
 const LOAD: DataColumn<RouteLoad>[] = [
     { id: 'route', header: 'Route', width: 'minmax(16rem,2fr)', cell: (row) => <span className="font-mono text-xs">{row.route}</span>, sortValue: (row) => row.route },
     { id: 'method', header: 'Method', width: '6rem', cell: (row) => <span className="font-mono text-xs">{row.method}</span>, sortValue: (row) => row.method },
@@ -67,7 +61,7 @@ export function System() {
     const model = useModel()
     const system = useResource(api.system, [])
     const health = useResource(api.health, [], 10_000)
-    const metrics = useResource(readMetrics, [], 10_000)
+    const metrics = useResource(api.metrics, [], 10_000)
     const parsed = useMemo(() => samples(metrics.data ?? ''), [metrics.data])
     const load = useMemo(() => {
         const rows = new Map<string, RouteLoad>()
@@ -91,7 +85,7 @@ export function System() {
             <PageHeader
                 title="System"
                 description="The host the service runs on, its health and what it has served."
-                lead={health.data ? <StatusChip status={health.data.status} /> : undefined}
+                lead={health.error !== undefined ? <StatusChip status="unreachable" /> : health.data ? <StatusChip status={health.data.status} /> : undefined}
             />
             <DashboardGrid>
                 <StatPanel title="Requests" value={metrics.data ? total('http_server_requests_total') : null} loading={metrics.loading} span="quarter" />
@@ -104,7 +98,7 @@ export function System() {
                     loading={metrics.loading}
                     span="quarter"
                 />
-                <DashboardPanel title="Host" span="half" loading={system.loading} error={system.error?.message}>
+                <DashboardPanel title="Host" span="half" loading={system.loading} error={system.error?.message} onRetry={system.reload}>
                     <DescriptionList
                         termWidth="9rem"
                         items={[
@@ -117,12 +111,20 @@ export function System() {
                         ]}
                     />
                 </DashboardPanel>
-                <DashboardPanel title="Health checks" span="half" loading={health.loading} error={health.error?.message}>
+                <DashboardPanel title="Health checks" span="half" loading={health.loading} error={health.error?.message} onRetry={health.reload}>
                     <DescriptionList
                         termWidth="9rem"
                         items={[
                             { term: 'Service', value: health.data ? <StatusChip status={health.data.status} /> : undefined },
-                            ...checks.map(([name, check]) => ({ term: name.charAt(0).toUpperCase() + name.slice(1), value: <StatusChip status={check.state} /> })),
+                            ...checks.map(([name, check]) => ({
+                                term: name.charAt(0).toUpperCase() + name.slice(1),
+                                value: (
+                                    <span className="flex flex-wrap items-center gap-2">
+                                        <StatusChip status={check.state} />
+                                        {check.message && <span className="text-muted-foreground">{check.message}</span>}
+                                    </span>
+                                ),
+                            })),
                             { term: 'Extensions', value: model?.extensions?.join(', '), code: true },
                             { term: 'Periods', value: model ? `${model.min_prediction_periods ?? 0} to ${model.max_prediction_periods ?? '-'}` : undefined },
                         ]}
@@ -135,6 +137,7 @@ export function System() {
                     flush
                     loading={metrics.loading}
                     error={metrics.error?.message}
+                    onRetry={metrics.reload}
                     empty={metrics.data !== undefined && load.length === 0}
                 >
                     <DataTable

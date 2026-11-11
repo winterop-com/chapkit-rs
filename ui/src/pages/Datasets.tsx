@@ -1,6 +1,6 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { ConfirmDialog, DialogShell } from '@winterop-com/sokkel-ui/DialogShell'
-import { FileField } from '@winterop-com/sokkel-ui/FileField'
+import { checkFiles, FileField, type RefusalReason } from '@winterop-com/sokkel-ui/FileField'
 import { Stack } from '@winterop-com/sokkel-ui/Layout'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
@@ -12,11 +12,28 @@ import { toast } from '@winterop-com/sokkel-ui/primitives/toast'
 import { Upload } from 'lucide-react'
 import { useState } from 'react'
 
-import { api } from '../api/client'
+import { api, asApiError } from '../api/client'
 import type { Dataset } from '../api/types'
+import { useModel } from '../App'
 import { count, dateOf, periodWord, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
+import { ReadProblem } from '../parts'
+
+/** The files a dataset is read from. */
+const ACCEPT = ['.csv', '.json']
+
+/** Files offered for an upload, sorted by the field's own rules into the one taken and those refused. */
+interface Offered {
+    taken: File[]
+    refused: { file: File; reason: RefusalReason }[]
+}
+
+/** The service's upload limit, when it says it. */
+const useUploadLimit = () => useModel()?.max_body_bytes
+
+/** Files dropped on the page, held to the same limits as the field's picker. */
+const offer = (files: readonly File[], maxSize: number | undefined): Offered => checkFiles(files, { accept: ACCEPT, maxSize, maxFiles: 1 })
 
 const COLUMNS: DataColumn<Dataset>[] = [
     { id: 'name', header: 'Name', width: 'minmax(12rem,2fr)', cell: (row) => <span className="font-medium">{row.name}</span>, sortValue: (row) => row.name },
@@ -55,24 +72,29 @@ export function UploadDialog({
 }: {
     open: boolean
     onOpenChange: (open: boolean) => void
-    initial: File[]
+    initial: Offered
     onUploaded: (dataset: Dataset) => void
 }) {
-    const [files, setFiles] = useState<File[]>(initial)
-    const [name, setName] = useState(initial[0] ? baseName(initial[0]) : '')
+    const maxSize = useUploadLimit()
+    const [files, setFiles] = useState<File[]>(initial.taken)
+    const [name, setName] = useState(initial.taken[0] ? baseName(initial.taken[0]) : '')
+    const [target, setTarget] = useState('disease_cases')
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<{ title: string; detail?: string }>()
     const file = files[0]
     const upload = () => {
-        if (file === undefined) return
+        if (file === undefined || busy) return
         setBusy(true)
         setError(undefined)
-        api.uploadDataset(name.trim() || baseName(file), file)
+        api.uploadDataset(name.trim() || baseName(file), file, target)
             .then((dataset) => {
                 toast.add({ type: 'success', title: `${dataset.name} uploaded`, description: `${count(dataset.rows)} rows, ${dataset.locations} locations` })
                 onUploaded(dataset)
             })
-            .catch((failure: { message: string; detail?: string }) => setError({ title: failure.message, detail: failure.detail }))
+            .catch((failure: unknown) => {
+                const refused = asApiError(failure)
+                setError({ title: refused.message, detail: refused.detail })
+            })
             .finally(() => setBusy(false))
     }
     return (
@@ -86,16 +108,18 @@ export function UploadDialog({
                 onConfirm: upload,
                 busy,
                 busyLabel: 'Uploading',
-                why: file === undefined ? 'Choose a file first' : undefined,
+                why: file === undefined ? 'Choose a file first' : target.trim() === '' ? 'Name the target column' : undefined,
             }}
         >
             <div className="flex flex-col gap-4">
                 <FileField
                     id="dataset-file"
                     label="File"
-                    accept={['.csv', '.json']}
+                    accept={ACCEPT}
+                    maxSize={maxSize}
                     maxFiles={1}
                     previews={false}
+                    defaultRefused={initial.refused}
                     value={files}
                     onChange={(next) => {
                         setFiles(next)
@@ -103,6 +127,16 @@ export function UploadDialog({
                     }}
                 />
                 <TextField id="dataset-name" label="Name" value={name} onChange={setName} placeholder={file ? baseName(file) : 'laos-monthly'} />
+                <TextField
+                    id="dataset-target"
+                    label="Target column"
+                    hint="numeric"
+                    help="The column evaluated and forecast; chap-core's is disease_cases."
+                    required
+                    value={target}
+                    onChange={setTarget}
+                    placeholder="disease_cases"
+                />
                 {error && <Problem title={`The upload was refused: ${error.title}`} detail={error.detail} />}
             </div>
         </DialogShell>
@@ -112,7 +146,8 @@ export function UploadDialog({
 /** The datasets the service holds, an upload by drop or picker, and a way into each. */
 export function Datasets() {
     const datasets = useResource(api.datasets, [])
-    const [upload, setUpload] = useState<File[] | null>(null)
+    const maxSize = useUploadLimit()
+    const [upload, setUpload] = useState<Offered | null>(null)
     const [removing, setRemoving] = useState<Dataset | null>(null)
     const rows = datasets.data ?? []
 
@@ -127,21 +162,21 @@ export function Datasets() {
         )
 
     return (
-        <DropZone onFiles={(files) => setUpload(files.slice(0, 1))} words={{ title: 'Drop to upload', detail: 'A CSV or JSON dataset' }}>
+        <DropZone onFiles={(files) => setUpload(offer(files, maxSize))} words={{ title: 'Drop to upload', detail: 'A CSV or JSON dataset' }}>
             <Stack gap="section">
             <PageHeader
                 title="Datasets"
                 count={datasets.data ? rows.length : undefined}
                 description="Data to evaluate the model on and to forecast from. Drop a CSV or JSON file anywhere here to upload it."
                 actions={
-                    <Button size="sm" onClick={() => setUpload([])}>
+                    <Button size="sm" onClick={() => setUpload({ taken: [], refused: [] })}>
                         <Upload aria-hidden />
                         Upload
                     </Button>
                 }
             />
             {datasets.error ? (
-                <Problem title="Could not read the datasets" detail={datasets.error.detail} technical={datasets.error.message} actions={<Button size="sm" variant="outline" onClick={datasets.reload}>Try again</Button>} />
+                <ReadProblem what="the datasets" resource={datasets} />
             ) : (
                 <DataTable
                     columns={COLUMNS}
@@ -166,7 +201,7 @@ export function Datasets() {
                                 <EmptyDescription>Upload a CSV or JSON file, or drop one on this page.</EmptyDescription>
                             </EmptyHeader>
                             <EmptyContent>
-                                <Button size="sm" variant="outline" onClick={() => setUpload([])}>
+                                <Button size="sm" variant="outline" onClick={() => setUpload({ taken: [], refused: [] })}>
                                     Upload a dataset
                                 </Button>
                             </EmptyContent>

@@ -17,6 +17,7 @@ import type { Artifact } from '../api/types'
 import { bytes, dateOf, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
+import { ReadProblem } from '../parts'
 
 const TYPE_WORDS: Record<string, string> = {
     ml_backtest: 'Evaluation',
@@ -59,8 +60,12 @@ const COLUMNS: DataColumn<Artifact>[] = [
     { id: 'created', header: 'Created', width: '11rem', cell: (row) => when(row.created_at), sortValue: (row) => dateOf(row.created_at).getTime() },
 ]
 
+/** Downloads an artifact's content, saying so when it cannot. */
+const download = (id: string) =>
+    api.downloadArtifact(id).catch((failure: Error) => toast.add({ type: 'error', title: 'Could not download the artifact', description: failure.message }))
+
 function ArtifactView({ id }: { id: string }) {
-    const artifact = useResource(() => api.artifact(id), [id])
+    const artifact = useResource((signal) => api.artifact(id, signal), [id])
     const data = artifact.data
     return (
         <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status}>
@@ -71,7 +76,7 @@ function ArtifactView({ id }: { id: string }) {
                         code={data.id}
                         onBack={() => go('/artifacts')}
                         actions={
-                            <Button size="sm" variant="outline" nativeButton={false} render={<a href={api.artifactDownload(id)} download />}>
+                            <Button size="sm" variant="outline" onClick={() => void download(id)}>
                                 <Download aria-hidden />
                                 Download
                             </Button>
@@ -106,7 +111,7 @@ function ArtifactView({ id }: { id: string }) {
 
 /** Artifacts: everything the service stored, as the tree of what came from what. */
 export function Artifacts({ opened }: { opened: string | undefined }) {
-    const artifacts = useResource(() => api.artifacts(), [])
+    const artifacts = useResource((signal) => api.artifacts(undefined, signal), [])
     const [removing, setRemoving] = useState<Artifact | null>(null)
     const { roots, children } = useMemo(() => {
         const all = artifacts.data ?? []
@@ -130,7 +135,7 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
     return (
         <>
             <PageHeader title="Artifacts" count={artifacts.data?.length} description="What the service stored: evaluations, forecasts, trained models and predictions." />
-            <DataTable
+            {artifacts.error ? <ReadProblem what="the artifacts" resource={artifacts} /> : <DataTable
                 columns={COLUMNS}
                 rows={roots}
                 rowKey={(row) => row.id}
@@ -145,12 +150,12 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
                 rowActions={(row) => [
                     { id: 'open', label: 'Open', onSelect: () => go(pageOf(row)) },
                     { id: 'details', label: 'Details', onSelect: () => go(`/artifacts/${row.id}`) },
-                    { id: 'download', label: 'Download', onSelect: () => window.open(api.artifactDownload(row.id), '_blank') },
+                    { id: 'download', label: 'Download', onSelect: () => void download(row.id) },
                     { id: 'sep', separator: true },
                     { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
                 ]}
                 empty="Nothing stored yet. Evaluations and forecasts are kept here."
-            />
+            />}
             <ConfirmDialog
                 open={removing !== null}
                 onOpenChange={(open) => !open && setRemoving(null)}

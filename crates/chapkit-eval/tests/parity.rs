@@ -223,12 +223,13 @@ fn assert_scores(scores: &Scores, want: &Value, tol: f64, ctx: &str) {
     }
 }
 
-/// Every metric, aggregate and breakdowns, to 1e-12 given chap-core's own forecasts.
+/// Every metric, aggregate and breakdowns, to 1e-12 given chap-core's own forecasts (`signed`:
+/// samples below -1, whose log1p is NaN).
 #[test]
 fn metrics_match_chap_core() {
     for name in CASES {
         let c = case(name);
-        for model in ["seasonal_median", "covariate", "since_last"] {
+        for model in ["seasonal_median", "covariate", "since_last", "signed"] {
             let want = &c.fixture["models"][model];
             let scores = score(&forecasts(&want["forecasts"]), &c.data).unwrap();
             assert_scores(&scores, want, 1e-12, &format!("{name}/{model}"));

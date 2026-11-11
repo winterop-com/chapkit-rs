@@ -413,7 +413,8 @@ pub fn with_params(base: &Value, params: &Params) -> Value {
 }
 
 /// Search `model`'s search space: each trial backtests the model with `base` and the candidate's
-/// values on `data` (split once), scored by `metric`.
+/// values on `data` (split once), scored by `metric`. Each call's [`RunInfo`] has the backtest's
+/// horizon and the merged config's `additional_continuous_covariates`, as the service gives them.
 pub fn search_model<M: Model>(
     model: &M,
     base: &Value,
@@ -429,10 +430,11 @@ pub fn search_model<M: Model>(
     let direction = direction(metric)?;
     let splits =
         train_test_splits(data, backtest, weather).map_err(|e| Error::Invalid(e.to_string()))?;
-    let run = RunInfo::with_periods(u32::try_from(backtest.periods).unwrap_or(u32::MAX));
+    let periods = u32::try_from(backtest.periods).unwrap_or(u32::MAX);
     search(&space, options, direction, |params| {
-        let config: M::Config =
-            serde_json::from_value(with_params(base, params)).map_err(|e| e.to_string())?;
+        let merged = with_params(base, params);
+        let run = RunInfo::for_config(periods, &merged);
+        let config: M::Config = serde_json::from_value(merged).map_err(|e| e.to_string())?;
         let bt = backtest_splits(
             &splits,
             backtest,

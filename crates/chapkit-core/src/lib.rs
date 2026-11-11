@@ -24,7 +24,9 @@ pub use error::{Error, Result};
 pub use info::{AssessedStatus, ModelInfo, ModelMetadata, PeriodType};
 pub use model::{Model, NoConfig, PredictInput, TrainInput};
 pub use period::Period;
-pub use prediction::prediction_frame;
+pub use prediction::{
+    DEFAULT_MAX_PREDICTION_CELLS, max_prediction_cells, prediction_frame, set_max_prediction_cells,
+};
 pub use run::{Geo, RunInfo};
 pub use search::{Param, SearchSpace};
 pub use validate::{Diagnostic, Severity};

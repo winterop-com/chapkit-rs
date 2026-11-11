@@ -1,6 +1,39 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use chapkit_dataframe::{Column, DataFrame, cols};
 
 use crate::{Error, Result};
+
+/// The default of [`max_prediction_cells`]: 250 million cells, about 2 GB of samples.
+pub const DEFAULT_MAX_PREDICTION_CELLS: usize = 250_000_000;
+
+static MAX_PREDICTION_CELLS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_PREDICTION_CELLS);
+
+/// The most cells (future rows times samples) [`prediction_frame`] and
+/// [`predict_by_location`](crate::locations::predict_by_location) build; a larger forecast is an
+/// error before the model is asked for it. The service sets it from
+/// `CHAPKIT_MAX_PREDICTION_CELLS`.
+pub fn max_prediction_cells() -> usize {
+    MAX_PREDICTION_CELLS.load(Ordering::Relaxed)
+}
+
+/// Set [`max_prediction_cells`] for the process.
+pub fn set_max_prediction_cells(cells: usize) {
+    MAX_PREDICTION_CELLS.store(cells, Ordering::Relaxed);
+}
+
+/// Refuse a forecast of `rows` future rows with `n_samples` samples each over
+/// [`max_prediction_cells`].
+pub(crate) fn check_prediction_cells(rows: usize, n_samples: usize) -> Result<()> {
+    let (cells, max) = (rows.saturating_mul(n_samples), max_prediction_cells());
+    if cells > max {
+        return Err(Error::invalid(format!(
+            "the forecast would have {cells} cells ({rows} future rows x {n_samples} samples), \
+             more than the limit of {max} (CHAPKIT_MAX_PREDICTION_CELLS)"
+        )));
+    }
+    Ok(())
+}
 
 /// Build a chapkit prediction frame: `time_period`, `location`, `sample_0..n_samples`,
 /// one output row per row of `future`.
@@ -15,6 +48,7 @@ pub fn prediction_frame(
         return Err(Error::invalid("n_samples must be at least 1"));
     }
     let n = future.n_rows();
+    check_prediction_cells(n, n_samples)?;
     let mut samples: Vec<Vec<Option<f64>>> =
         (0..n_samples).map(|_| Vec::with_capacity(n)).collect();
     let mut buf = vec![0.0; n_samples];
@@ -34,4 +68,28 @@ pub fn prediction_frame(
         out.push_column(cols::sample(i), Column::Float(col))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Refused before anything is allocated; 100,000 locations x 12 periods x 100 samples fit.
+    #[test]
+    fn prediction_cells_are_bounded() {
+        let future = DataFrame::from_columns(vec![
+            (cols::TIME_PERIOD, Column::from_strs(["2024-01"])),
+            (cols::LOCATION, Column::from_strs(["A"])),
+        ])
+        .unwrap();
+        let e = prediction_frame(&future, DEFAULT_MAX_PREDICTION_CELLS + 1, |_, _| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("CHAPKIT_MAX_PREDICTION_CELLS"), "{e}");
+        let e = crate::locations::predict_by_location(&future, usize::MAX, |_, _| Ok(vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("more than the limit"), "{e}");
+        assert!(check_prediction_cells(100_000 * 12, 100).is_ok());
+    }
 }

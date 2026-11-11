@@ -24,7 +24,8 @@ Writes crates/chapkit-eval/fixtures/eval_<case>.json, each with:
   period, each split's last historic period, its future periods and the masked future frame;
 - `models`: per model (chap-core's `seasonal_median`; `covariate`, a deterministic test model
   that reads history and future covariates; `since_last`, one that counts the periods since the
-  last observation, as chap-core's persistence does; both repeated in Rust), the flat forecasts of chap-core's
+  last observation, as chap-core's persistence does; both repeated in Rust; `signed`, one with samples
+  below -1, scored from its forecasts only), the flat forecasts of chap-core's
   `backtest` with retraining and the metrics: the aggregate as chap-core's REST API stores it
   (`compute_all_aggregated_metrics_from_backtest`, observations from the whole dataset), and the
   breakdowns by horizon and by location.
@@ -184,6 +185,28 @@ class SinceLast:
         return DataSet(out)
 
 
+class Signed:
+    """Deterministic test model whose samples go below -1, where log1p is NaN (the log-Winkler
+    metrics are then NaN, as numpy's percentile propagates it). Scored only from its forecasts.
+
+    Per sample k: last - mean + OFFSETS[k], `mean` and `last` as in `Covariate`.
+    """
+
+    def train(self, data: DataSet):
+        return SignedPredictor(Covariate().train(data).means)
+
+
+class SignedPredictor(CovariatePredictor):
+    def predict(self, historic: DataSet, future: DataSet) -> DataSet:
+        out = {}
+        for loc, f in future.items():
+            y = np.asarray(historic[loc].disease_cases, dtype=float)
+            last = float(y[np.isfinite(y)][-1])
+            base = np.full(len(f.time_period), last - self.means[loc])
+            out[loc] = Samples(f.time_period, base[:, None] + Covariate.OFFSETS[None, :])
+        return DataSet(out)
+
+
 class Builtin:
     """chap-core's estimator shape around a built-in baseline: train returns the predictor."""
 
@@ -303,6 +326,7 @@ def run(case: str, df: pd.DataFrame, params: dict, masked: list[dict] | None = N
             "seasonal_median": metrics_of(ds, Builtin("seasonal_median"), params, stored),
             "covariate": metrics_of(ds, Covariate(), params, stored),
             "since_last": metrics_of(ds, SinceLast(), params, stored),
+            "signed": metrics_of(ds, Signed(), params, stored),
         },
     }
     path = OUT / f"eval_{case}.json"

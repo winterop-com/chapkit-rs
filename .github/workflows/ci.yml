@@ -56,6 +56,35 @@ jobs:
           "$GITHUB_WORKSPACE/target/release/chapkit-rs" test
           target/release/ci-model test --port 8000
 
+  ui:
+    name: The web UI builds from source to the committed build
+    runs-on: ubuntu-24.04
+    # sokkel-ui comes from GitHub Packages; the job's token reads it once the package grants this
+    # repository Actions access (the package's settings, Manage Actions access).
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.0
+      - name: Install (frozen lockfile), lint, test and build
+        env:
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: make ui
+      - name: The committed build is a build of the source
+        run: |
+          changed=$(git status --porcelain -- crates/chapkit-ui/dist)
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::crates/chapkit-ui/dist differs from a build of ui/: run make ui and commit the result"
+            exit 1
+          fi
+
   docs:
     name: Build the book
     runs-on: ubuntu-24.04

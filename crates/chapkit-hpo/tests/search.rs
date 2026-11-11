@@ -294,6 +294,70 @@ fn searches_a_model_by_backtest_reproducibly() {
     assert!(json["leaderboard"][0]["trial_nr"].is_u64());
 }
 
+/// Reads `additional_continuous_covariates` from the run, as models do: fails without them.
+struct NeedsRainfall;
+
+impl chapkit_core::Model for NeedsRainfall {
+    type Config = common::SeasonalConfig;
+    type Trained = <Seasonal as chapkit_core::Model>::Trained;
+
+    fn info(&self) -> chapkit_core::ModelInfo {
+        chapkit_core::ModelInfo::default()
+    }
+
+    fn search_space(&self) -> Option<SearchSpace> {
+        Seasonal.search_space()
+    }
+
+    fn train(
+        &self,
+        config: &Self::Config,
+        input: chapkit_core::TrainInput<'_>,
+    ) -> chapkit_core::Result<Self::Trained> {
+        if input.run.additional_continuous_covariates != ["rainfall"] {
+            return Err(chapkit_core::Error::invalid("rainfall is not configured"));
+        }
+        Seasonal.train(config, input)
+    }
+
+    fn predict(
+        &self,
+        trained: &Self::Trained,
+        config: &Self::Config,
+        input: chapkit_core::PredictInput<'_>,
+    ) -> chapkit_core::Result<chapkit_core::DataFrame> {
+        Seasonal.predict(trained, config, input)
+    }
+}
+
+/// The config's covariates reach the model, as in the service's `$hpo`.
+#[test]
+fn search_model_passes_the_configured_covariates() {
+    let data = Generator::new(Some(5))
+        .training_data(&Spec {
+            num_locations: 2,
+            num_periods: 36,
+            ..Spec::default()
+        })
+        .unwrap();
+    let backtest = BacktestOptions {
+        periods: 2,
+        splits: 2,
+        ..BacktestOptions::default()
+    };
+    let s = search_model(
+        &NeedsRainfall,
+        &json!({"additional_continuous_covariates": ["rainfall"]}),
+        &data,
+        &backtest,
+        &Climatology,
+        Metric::Crps,
+        &random(4, 1),
+    )
+    .unwrap();
+    assert_eq!(s.n_successful_trials, 4, "{:?}", s.leaderboard);
+}
+
 #[test]
 fn grid_takes_choices_only_by_default_as_chap_core() {
     let choices = SearchSpace::new()

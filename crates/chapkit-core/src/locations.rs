@@ -89,6 +89,7 @@ pub fn predict_by_location<F>(
 where
     F: Fn(&str, &[FutureRow]) -> Result<Vec<Vec<f64>>> + Sync,
 {
+    crate::prediction::check_prediction_cells(future.n_rows(), n_samples)?;
     let per_location: Vec<Vec<(usize, Vec<f64>)>> = future_by_location(future)?
         .par_iter()
         .map(|(loc, rows)| {

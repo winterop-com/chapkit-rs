@@ -33,6 +33,8 @@ export interface Info {
     min_prediction_periods?: number
     max_prediction_periods?: number
     requires_geo?: boolean
+    /** The largest request body the service takes, in bytes. chapkit-rs. */
+    max_body_bytes?: number
 }
 
 export interface SystemInfo {
@@ -77,7 +79,7 @@ export interface JobSubmitted {
     message: string
 }
 
-export interface Artifact<C = unknown> {
+export interface Artifact<C = unknown, S = unknown> {
     id: string
     parent_id?: string | null
     level: number
@@ -90,6 +92,8 @@ export interface Artifact<C = unknown> {
         content_type?: string | null
         content_size?: number | null
         metadata?: Record<string, unknown> | null
+        /** A backtest's or forecast's summary, in a listing in place of its content. */
+        summary?: S
     }
 }
 
@@ -204,6 +208,27 @@ export interface Forecast {
     weather?: string | null
     forecasts: ForecastRow[]
     frame?: Frame
+}
+
+/** What a listing says of an `ml_backtest` artifact. */
+export type EvaluationSummary = Pick<Evaluation, 'dataset_id' | 'data' | 'options' | 'aggregate'>
+
+/** What a listing says of an `ml_forecast` artifact. */
+export interface ForecastSummary {
+    dataset_id?: string | null
+    periods?: number
+    weather?: string | null
+    first_period?: string | null
+    locations?: number
+}
+
+/** One page of a listing. */
+export interface Page<T> {
+    items: T[]
+    total: number
+    page: number
+    size: number
+    pages: number
 }
 
 /** A problem+json error body. */

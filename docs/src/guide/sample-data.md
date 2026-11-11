@@ -22,7 +22,9 @@ so models have something to learn. Future periods continue the historic calendar
 Query parameters of the endpoint: `kind` (`train` or `predict`), `config_id` (adds its covariates),
 `num_locations` (5), `num_periods` (50), `num_features` (3), `period_type` (`monthly` or `weekly`, default
 from the model), `geo_type` (`polygon` or `point`), `include_geo` (default: the model's `requires_geo`),
-`seed` (negative for fresh data).
+`seed` (negative for fresh data). A sample holds at most 20 million cells (locations x periods x columns,
+history and future for `predict`), about 200 MB of JSON; a larger one is a 400. Weekly periods follow the
+ISO calendar, week 53 included.
 
 `chapkit::rng::Rng` is the seedable generator behind it, also used by the explainers; models can use it for
 reproducible sampling.

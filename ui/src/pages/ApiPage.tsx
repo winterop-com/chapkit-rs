@@ -1,6 +1,5 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
-import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { Badge } from '@winterop-com/sokkel-ui/primitives/badge'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
 import { ExternalLink, FileJson } from 'lucide-react'
@@ -8,6 +7,7 @@ import { useMemo } from 'react'
 
 import { api } from '../api/client'
 import { useResource } from '../lib/resource'
+import { ReadProblem } from '../parts'
 
 interface Route {
     key: string
@@ -68,7 +68,7 @@ export function ApiPage() {
                 }
             />
             {spec.error ? (
-                <Problem title="Could not read the OpenAPI document" technical={spec.error.message} />
+                <ReadProblem what="the OpenAPI document" resource={spec} />
             ) : (
                 <DataTable
                     columns={COLUMNS}

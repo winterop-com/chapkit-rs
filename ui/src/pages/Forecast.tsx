@@ -11,12 +11,27 @@ import { Download, Play } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../api/client'
-import type { Artifact, Forecast as ForecastContent, ForecastRow } from '../api/types'
-import { count, dateOf, score, when } from '../lib/format'
+import type { Artifact, Forecast as ForecastContent, ForecastRow, ForecastSummary } from '../api/types'
+import { count, score, when } from '../lib/format'
 import { saveFile, toCsv } from '../lib/csv'
 import { useResource } from '../lib/resource'
 import { go, hashParam } from '../lib/router'
-import { configOptions, datasetOptions, JobProgress, LocationFan, LocationPicker, SelectField, WEATHER, type FanPoint } from '../parts'
+import {
+    configOptions,
+    datasetOptions,
+    FanChart,
+    HistoryNote,
+    JobProgress,
+    LocationPicker,
+    ReadProblem,
+    SelectField,
+    useHistory,
+    useJobRun,
+    WEATHER,
+    type FanPoint,
+} from '../parts'
+
+const NONE: FanPoint[] = []
 
 function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
     const datasets = useResource(api.datasets, [])
@@ -25,23 +40,21 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
     const [config, setConfig] = useState('')
     const [periods, setPeriods] = useState<number | null>(3)
     const [weather, setWeather] = useState('climatology')
-    const [running, setRunning] = useState<{ job: string; artifact: string }>()
-    const [error, setError] = useState<{ title: string; detail?: string }>()
+    const run = useJobRun('forecast')
     useEffect(() => {
         const first = datasets.data?.[0]
         if (dataset === '' && first !== undefined) setDataset(first.id)
     }, [datasets.data, dataset])
-    const start = () => {
-        setError(undefined)
-        api.forecast({ dataset_id: dataset, ...(config === '' ? {} : { config_id: config }), ...(periods === null ? {} : { periods }), weather }).then(
-            (submitted) => setRunning({ job: submitted.job_id, artifact: submitted.artifact_id }),
-            (failure: { message: string; detail?: string }) => setError({ title: failure.message, detail: failure.detail }),
+    const start = () =>
+        run.start(() =>
+            api.forecast({ dataset_id: dataset, ...(config === '' ? {} : { config_id: config }), ...(periods === null ? {} : { periods }), weather }),
         )
-    }
     const noData = datasets.data !== undefined && datasets.data.length === 0
     return (
         <Section title="New forecast" description="Train on the whole dataset and forecast the periods after its last one.">
             <Stack gap="lg">
+                <ReadProblem what="the datasets" resource={datasets} />
+                <ReadProblem what="the configs" resource={configs} tone="warning" />
                 {noData ? (
                     <Problem
                         tone="warning"
@@ -62,13 +75,21 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
                     </div>
                 )}
                 <div>
-                    <Button onClick={start} disabled={dataset === '' || (running !== undefined && error === undefined)}>
+                    <Button onClick={start} disabled={dataset === ''} reason={run.reason}>
                         <Play aria-hidden />
                         Run forecast
                     </Button>
                 </div>
-                {error && <Problem title={`The forecast was refused: ${error.title}`} detail={error.detail} />}
-                {running && <JobProgress key={running.job} jobId={running.job} what="forecast" onDone={() => onDone(running.artifact)} />}
+                {run.error && <Problem title={`The forecast was refused: ${run.error.title}`} detail={run.error.detail} />}
+                {run.running && (
+                    <JobProgress
+                        key={run.running.job}
+                        jobId={run.running.job}
+                        what="forecast"
+                        onDone={() => run.running && onDone(run.running.artifact)}
+                        onEnd={run.onEnd}
+                    />
+                )}
             </Stack>
         </Section>
     )
@@ -90,9 +111,10 @@ const ROW_COLUMNS: DataColumn<ForecastRow>[] = [
 ]
 
 function ForecastView({ id }: { id: string }) {
-    const artifact = useResource(() => api.artifact<ForecastContent>(id), [id])
+    const artifact = useResource((signal) => api.artifact<ForecastContent>(id, signal), [id])
     const result = artifact.data?.data.content
-    const dataset = useResource(result ? () => api.dataset(result.dataset_id) : null, [result?.dataset_id])
+    const datasetId = result?.dataset_id ?? undefined
+    const dataset = useResource(datasetId === undefined ? null : (signal) => api.dataset(datasetId, signal), [datasetId])
     const rows = useMemo(() => result?.forecasts ?? [], [result])
     const locations = useMemo(() => [...new Set(rows.map((row) => row.location))], [rows])
     const [chosen, setChosen] = useState<string[]>([])
@@ -102,6 +124,8 @@ function ForecastView({ id }: { id: string }) {
         for (const row of rows) out.set(row.location, [...(out.get(row.location) ?? []), { ...row, period: row.time_period }])
         return out
     }, [rows])
+    const first = useMemo(() => rows.map((row) => row.time_period).sort()[0], [rows])
+    const history = useHistory(dataset.data, chosen, first, result?.periods ?? 1)
     const download = () =>
         saveFile(`forecast-${dataset.data?.name ?? id}.csv`, toCsv(rows, ['location', 'time_period', 'median', 'q10', 'q25', 'q75', 'q90']))
 
@@ -136,18 +160,21 @@ function ForecastView({ id }: { id: string }) {
                         description="The observed history, then the median forecast with its 10-90 and 25-75 intervals."
                         actions={<LocationPicker locations={locations} value={chosen} onChange={setChosen} />}
                     >
-                        <div className="grid gap-4 lg:grid-cols-2">
-                            {chosen.map((location) => (
-                                <LocationFan
-                                    key={location}
-                                    dataset={dataset.data}
-                                    location={location}
-                                    forecast={fans.get(location) ?? []}
-                                    subtitle="recent history and the forecast"
-                                    file={`forecast-${location}`}
-                                />
-                            ))}
-                        </div>
+                        <Stack gap="lg">
+                            <HistoryNote dataset={datasetId === undefined ? undefined : dataset} history={history} />
+                            <div className="grid gap-4 lg:grid-cols-2">
+                                {chosen.map((location) => (
+                                    <FanChart
+                                        key={location}
+                                        title={location}
+                                        subtitle="recent history and the forecast"
+                                        file={`forecast-${location}`}
+                                        points={[...(history.data?.get(location) ?? NONE), ...(fans.get(location) ?? NONE)]}
+                                        loading={history.loading}
+                                    />
+                                ))}
+                            </div>
+                        </Stack>
                     </Section>
                     <Section title="Values" meta={`${count(rows.length)} rows`} flush>
                         <DataTable
@@ -167,57 +194,59 @@ function ForecastView({ id }: { id: string }) {
     )
 }
 
-/** The columns of past runs, naming each one's dataset. */
-const pastColumns = (names: ReadonlyMap<string, string>): DataColumn<Artifact>[] => [
-    { id: 'created', header: 'Created', width: '11rem', cell: (row) => when(row.created_at), sortValue: (row) => dateOf(row.created_at).getTime() },
+type Past = Artifact<never, ForecastSummary>
+
+/** The columns of past runs, naming each one's dataset, from their summaries. */
+const pastColumns = (names: ReadonlyMap<string, string>): DataColumn<Past>[] => [
+    { id: 'created', header: 'Created', width: '11rem', cell: (row) => when(row.created_at) },
     {
         id: 'dataset',
         header: 'Dataset',
         width: 'minmax(10rem,1.5fr)',
         cell: (row) => {
-            const id = (row.data.content as ForecastContent | undefined)?.dataset_id
+            const id = row.data.summary?.dataset_id
             return id ? (names.get(id) ?? <span className="font-mono text-xs">{id}</span>) : <span className="text-muted-foreground">request data</span>
         },
     },
-    {
-        id: 'periods',
-        header: 'Periods',
-        width: '6rem',
-        align: 'end',
-        cell: (row) => (row.data.content as ForecastContent | undefined)?.periods ?? '-',
-    },
+    { id: 'periods', header: 'Periods', width: '6rem', align: 'end', cell: (row) => row.data.summary?.periods ?? '-' },
     {
         id: 'from',
         header: 'From',
         width: 'minmax(8rem,1fr)',
-        cell: (row) => <span className="font-mono text-xs">{(row.data.content as ForecastContent | undefined)?.forecasts[0]?.time_period ?? '-'}</span>,
+        cell: (row) => <span className="font-mono text-xs">{row.data.summary?.first_period ?? '-'}</span>,
     },
-    {
-        id: 'locations',
-        header: 'Locations',
-        width: '7rem',
-        align: 'end',
-        cell: (row) => new Set((row.data.content as ForecastContent | undefined)?.forecasts.map((each) => each.location)).size,
-    },
+    { id: 'locations', header: 'Locations', width: '7rem', align: 'end', cell: (row) => row.data.summary?.locations ?? '-' },
 ]
 
-/** Forecast: start one, follow it, and read it as fans and a table; past forecasts below. */
-export function Forecast({ opened }: { opened: string | undefined }) {
-    const history = useResource(() => api.recent('ml_forecast', 50), [opened])
+const PAGE = 25
+
+/** The forecasts made before, newest first, a page at a time. */
+function PastForecasts() {
+    const [page, setPage] = useState(0)
+    const [size, setSize] = useState(PAGE)
+    const history = useResource((signal) => api.forecasts(page + 1, size, signal), [page, size])
     const datasets = useResource(api.datasets, [])
     const names = useMemo(() => new Map((datasets.data ?? []).map((each) => [each.id, each.name])), [datasets.data])
-    if (opened !== undefined) return <ForecastView id={opened} />
     return (
-        <Stack gap="section">
-            <PageHeader title="Forecast" description="Forecast the periods after a dataset's last one, with intervals." />
-            <NewForecast onDone={(artifactId) => go(`/forecast/${artifactId}`)} />
-            <Section title="Past forecasts" meta={history.data ? `${history.data.length}` : undefined} flush>
+        <Section title="Past forecasts" meta={history.data ? `${history.data.total}` : undefined} flush>
+            {history.error ? (
+                <ReadProblem what="the past forecasts" resource={history} />
+            ) : (
                 <DataTable
                     columns={pastColumns(names)}
-                    rows={history.data ?? []}
+                    rows={history.data?.items ?? []}
                     rowKey={(row) => row.id}
                     loading={history.loading}
-                    defaultSort={{ column: 'created', direction: 'desc' }}
+                    paging="server"
+                    total={history.data?.total}
+                    page={page}
+                    onPageChange={setPage}
+                    pageSize={size}
+                    onPageSizeChange={(next) => {
+                        setSize(next)
+                        setPage(0)
+                    }}
+                    pageSizes={[10, 25, 50, 100]}
                     onOpen={(row) => go(`/forecast/${row.id}`)}
                     chevron
                     framed={false}
@@ -225,7 +254,19 @@ export function Forecast({ opened }: { opened: string | undefined }) {
                     minWidth="36rem"
                     empty="No forecast yet."
                 />
-            </Section>
+            )}
+        </Section>
+    )
+}
+
+/** Forecast: start one, follow it, and read it as fans and a table; past forecasts below. */
+export function Forecast({ opened }: { opened: string | undefined }) {
+    if (opened !== undefined) return <ForecastView id={opened} />
+    return (
+        <Stack gap="section">
+            <PageHeader title="Forecast" description="Forecast the periods after a dataset's last one, with intervals." />
+            <NewForecast onDone={(artifactId) => go(`/forecast/${artifactId}`)} />
+            <PastForecasts />
         </Stack>
     )
 }

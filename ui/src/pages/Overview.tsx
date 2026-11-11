@@ -8,9 +8,8 @@ import { TextLink } from '@winterop-com/sokkel-ui/TextLink'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
 
 import { api } from '../api/client'
-import type { Evaluation } from '../api/types'
 import { useModel } from '../App'
-import { canonicalPeriod, METRICS, periodWord, score, when } from '../lib/format'
+import { METRICS, periodWord, score, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
 
@@ -22,11 +21,11 @@ export function Overview() {
     const health = useResource(api.health, [], 15_000)
     const datasets = useResource(api.datasets, [])
     const configs = useResource(api.configs, [])
-    const evaluations = useResource(() => api.artifacts('ml_backtest'), [])
-    const forecasts = useResource(() => api.artifacts('ml_forecast'), [])
-    const newest = useResource(() => api.recent<Evaluation>('ml_backtest', 1), [])
-    const latest = newest.data?.[0]
-    const result = latest?.data.content
+    // The newest evaluation's summary, and with it how many there are.
+    const evaluations = useResource((signal) => api.evaluations(1, 1, signal), [])
+    const forecasts = useResource((signal) => api.forecasts(1, 1, signal), [])
+    const latest = evaluations.data?.items[0]
+    const result = latest?.data.summary
     const meta = model?.model_metadata
 
     return (
@@ -35,7 +34,7 @@ export function Overview() {
                 title={model?.display_name ?? 'Model'}
                 code={model?.id}
                 description={model?.description ?? undefined}
-                lead={health.data !== undefined ? <StatusChip status={health.data.status} /> : undefined}
+                lead={health.error !== undefined ? <StatusChip status="unreachable" /> : health.data !== undefined ? <StatusChip status={health.data.status} /> : undefined}
                 actions={
                     <>
                         <Button variant="outline" size="sm" onClick={() => go('/forecast')}>
@@ -48,16 +47,42 @@ export function Overview() {
                 }
             />
             <DashboardGrid>
-                <StatPanel title="Datasets" value={datasets.data?.length ?? null} loading={datasets.loading} href="#/datasets" span="quarter" />
+                <StatPanel
+                    title="Datasets"
+                    value={datasets.data?.length ?? null}
+                    loading={datasets.loading}
+                    error={datasets.error?.message}
+                    onRetry={datasets.reload}
+                    href="#/datasets"
+                    span="quarter"
+                />
                 <StatPanel
                     title="Evaluations"
-                    value={evaluations.data?.length ?? null}
+                    value={evaluations.data?.total ?? null}
                     loading={evaluations.loading}
+                    error={evaluations.error?.message}
+                    onRetry={evaluations.reload}
                     href="#/evaluate"
                     span="quarter"
                 />
-                <StatPanel title="Forecasts" value={forecasts.data?.length ?? null} loading={forecasts.loading} href="#/forecast" span="quarter" />
-                <StatPanel title="Configs" value={configs.data?.length ?? null} loading={configs.loading} href="#/configs" span="quarter" />
+                <StatPanel
+                    title="Forecasts"
+                    value={forecasts.data?.total ?? null}
+                    loading={forecasts.loading}
+                    error={forecasts.error?.message}
+                    onRetry={forecasts.reload}
+                    href="#/forecast"
+                    span="quarter"
+                />
+                <StatPanel
+                    title="Configs"
+                    value={configs.data?.length ?? null}
+                    loading={configs.loading}
+                    error={configs.error?.message}
+                    onRetry={configs.reload}
+                    href="#/configs"
+                    span="quarter"
+                />
                 <DashboardPanel title="Model" subtitle={model ? `version ${model.version}` : undefined} span="half" loading={model === undefined}>
                     <DescriptionList
                         termWidth="10rem"
@@ -92,7 +117,9 @@ export function Overview() {
                     subtitle={latest ? when(latest.created_at) : undefined}
                     span="half"
                     loading={evaluations.loading}
-                    empty={!evaluations.loading && latest === undefined}
+                    error={evaluations.error?.message}
+                    onRetry={evaluations.reload}
+                    empty={!evaluations.loading && evaluations.error === undefined && latest === undefined}
                     words={{ empty: 'No evaluation yet. Evaluate the model on a dataset to see how it scores.' }}
                     actions={
                         latest && (
@@ -115,7 +142,7 @@ export function Overview() {
                                     { term: 'Splits', value: result.options.splits, numeric: true },
                                     { term: 'Periods', value: result.options.periods, numeric: true },
                                     { term: 'Locations', value: result.data.locations, numeric: true },
-                                    { term: 'Range', value: result.data.first ? `${canonicalPeriod(result.data.first)} to ${canonicalPeriod(result.data.last ?? '')}` : undefined },
+                                    { term: 'Range', value: result.data.first ? `${result.data.first} to ${result.data.last ?? '-'}` : undefined },
                                 ]}
                             />
                         </div>

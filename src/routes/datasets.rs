@@ -369,34 +369,139 @@ fn query_values(query: Option<&str>, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// The dataset as stored, chapkit DataFrame JSON; with `location` (repeatable), only those
-/// locations' rows.
+/// What of a stored dataset `$data` returns.
+#[derive(Debug, Default)]
+struct Projection {
+    locations: HashSet<String>,
+    columns: Vec<String>,
+    before: Option<Period>,
+    last: Option<usize>,
+    canonical: bool,
+}
+
+impl Projection {
+    fn parse(query: Option<&str>) -> Result<Self, Problem> {
+        let one = |key: &str| query_values(query, key).pop();
+        let before = one("before")
+            .map(|raw| {
+                Period::parse(&raw).ok_or_else(|| {
+                    Problem::bad_request(format!("before {raw:?} is not a month or week"))
+                })
+            })
+            .transpose()?;
+        let last = one("last")
+            .map(|raw| {
+                raw.trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        Problem::bad_request(format!("last {raw:?} is not a positive number"))
+                    })
+            })
+            .transpose()?;
+        let canonical = match one("canonical").as_deref() {
+            None | Some("false" | "0") => false,
+            Some("true" | "1" | "") => true,
+            Some(raw) => {
+                return Err(Problem::bad_request(format!(
+                    "canonical {raw:?} is not true or false"
+                )));
+            }
+        };
+        Ok(Self {
+            locations: query_values(query, "location").into_iter().collect(),
+            columns: query_values(query, "column"),
+            before,
+            last,
+            canonical,
+        })
+    }
+
+    /// Whether rows need their periods read.
+    fn by_period(&self) -> bool {
+        self.before.is_some() || self.last.is_some() || self.canonical
+    }
+
+    /// The projected frame: the rows of the locations asked for, before `before`, in the `last`
+    /// periods; only `time_period`, `location` and the `columns` asked for; with `canonical`, the
+    /// periods written as chapkit writes them and the rows in period order.
+    fn apply(&self, frame: DataFrame) -> Result<DataFrame, Problem> {
+        let bad = |e: chapkit_core::FrameError| Problem::bad_request(e.to_string());
+        let mut rows: Vec<usize> = (0..frame.n_rows()).collect();
+        if !self.locations.is_empty() {
+            let loc = frame.require(cols::LOCATION).map_err(bad)?;
+            rows.retain(|&r| location_at(loc, r).is_some_and(|l| self.locations.contains(&l)));
+        }
+        let mut periods = Vec::new();
+        if self.by_period() {
+            let tp = frame.require(cols::TIME_PERIOD).map_err(bad)?;
+            // Stored datasets were checked on upload: every period parses.
+            let mut keyed: Vec<(Period, usize)> = rows
+                .iter()
+                .filter_map(|&r| tp.str_at(r).and_then(Period::parse).map(|p| (p, r)))
+                .filter(|(p, _)| self.before.is_none_or(|b| *p < b))
+                .collect();
+            if let Some(n) = self.last {
+                let distinct: BTreeSet<Period> = keyed.iter().map(|(p, _)| *p).collect();
+                if let Some(&from) = distinct.iter().rev().nth(n.saturating_sub(1)) {
+                    keyed.retain(|(p, _)| *p >= from);
+                }
+            }
+            if self.canonical {
+                keyed.sort_by_key(|(p, _)| *p);
+            }
+            rows = keyed.iter().map(|(_, r)| *r).collect();
+            periods = keyed.into_iter().map(|(p, _)| p.to_string()).collect();
+        }
+        let mut out = if rows.len() == frame.n_rows() && !self.canonical {
+            frame
+        } else {
+            frame.take(&rows).map_err(bad)?
+        };
+        if self.canonical {
+            out.set_column(cols::TIME_PERIOD, Column::from_strs(periods))
+                .map_err(bad)?;
+        }
+        if !self.columns.is_empty() {
+            let mut keep: Vec<&str> = vec![cols::TIME_PERIOD, cols::LOCATION];
+            for c in &self.columns {
+                if !out.has(c) {
+                    return Err(Problem::bad_request(format!(
+                        "the dataset has no column '{c}'"
+                    )));
+                }
+                if !keep.contains(&c.as_str()) {
+                    keep.push(c);
+                }
+            }
+            out = out.select(&keep).map_err(bad)?;
+        }
+        Ok(out)
+    }
+}
+
+/// The dataset as stored, chapkit DataFrame JSON, or a projection of it: `location`
+/// (repeatable) for some locations' rows, `column` (repeatable) for only those columns besides
+/// `time_period` and `location`, `before` for the periods before one, `last` for the last periods,
+/// and `canonical=true` for the periods as chapkit writes them (`2024-01`, `2024W03`, `2024SunW03`),
+/// the rows in period order.
 #[utoipa::path(get, path = "/{id}/$data", tag = "Datasets",
-    params(("id" = String, Path), ("location" = Option<Vec<String>>, Query, explode, description = "Only these locations (repeatable)")),
+    params(("id" = String, Path),
+        ("location" = Option<Vec<String>>, Query, explode, description = "Only these locations (repeatable)"),
+        ("column" = Option<Vec<String>>, Query, explode, description = "Only these columns besides time_period and location (repeatable)"),
+        ("before" = Option<String>, Query, description = "Only the periods before this one, in any form a dataset takes"),
+        ("last" = Option<usize>, Query, description = "Only the last this many periods (after `before`)"),
+        ("canonical" = Option<bool>, Query, description = "Periods as chapkit writes them, the rows in period order")),
     responses((status = OK, body = Object), (status = NOT_FOUND, body = Problem), (status = BAD_REQUEST, body = Problem)))]
 async fn data(
     State(s): State<AppState>,
     Path(id): Path<String>,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
-    let locations: HashSet<String> = query_values(query.as_deref(), "location")
-        .into_iter()
-        .collect();
+    let projection = Projection::parse(query.as_deref())?;
     let (frame, _) = stored_frame(&s, &id).await?;
-    let frame = if locations.is_empty() {
-        frame
-    } else {
-        let loc = frame
-            .require(cols::LOCATION)
-            .map_err(|e| Problem::bad_request(e.to_string()))?;
-        let mask: Vec<bool> = (0..frame.n_rows())
-            .map(|r| location_at(loc, r).is_some_and(|l| locations.contains(&l)))
-            .collect();
-        frame
-            .filter(&mask)
-            .map_err(|e| Problem::bad_request(e.to_string()))?
-    };
-    Ok(axum::Json(frame).into_response())
+    Ok(axum::Json(projection.apply(frame)?).into_response())
 }
 
 /// The router (mount at `/api/v1/datasets`).

@@ -47,7 +47,8 @@ impl Default for Options {
 }
 
 impl Options {
-    /// Check the settings as chap-core's `BacktestParams` does.
+    /// Check the settings as chap-core's `BacktestParams` does, and that the test windows'
+    /// length ([`Options::window`]) is a number.
     pub fn validate(&self) -> Result<()> {
         if self.periods == 0 || self.splits == 0 || self.stride == 0 || self.retrain == 0 {
             return Err(Error::invalid(
@@ -57,23 +58,66 @@ impl Options {
         if self.retrain > self.splits {
             return Err(Error::invalid("retrain cannot exceed splits"));
         }
-        Ok(())
+        self.window().map(|_| ())
     }
 
-    /// Periods covered by the test windows: `periods + (splits - 1) * stride`.
-    pub fn window(&self) -> usize {
-        self.periods + (self.splits - 1) * self.stride
+    /// Periods covered by the test windows: `periods + (splits - 1) * stride`. An error when
+    /// that, or the period of history before it, overflows.
+    pub fn window(&self) -> Result<usize> {
+        self.splits
+            .checked_sub(1)
+            .and_then(|s| s.checked_mul(self.stride))
+            .and_then(|s| s.checked_add(self.periods))
+            .filter(|w| *w < usize::MAX)
+            .ok_or_else(|| {
+                Error::invalid(format!(
+                    "{} splits of {} periods with stride {} is too large",
+                    self.splits, self.periods, self.stride
+                ))
+            })
     }
 }
 
 /// The splits at which the model is (re)trained: `{(j * splits) / retrain}` for `j < retrain`,
 /// chap-core's `_retrain_split_indices`. Always includes split 0.
 pub fn retrain_points(splits: usize, retrain: usize) -> Vec<usize> {
-    let mut points: Vec<usize> = (0..retrain.max(1))
-        .map(|j| j * splits / retrain.max(1))
+    let retrain = retrain.max(1);
+    // In u128, so `j * splits` cannot overflow; the quotient is below `splits`.
+    let mut points: Vec<usize> = (0..retrain)
+        .map(|j| {
+            let p = j as u128 * splits as u128 / retrain as u128;
+            usize::try_from(p).unwrap_or(splits)
+        })
         .collect();
     points.dedup();
     points
+}
+
+/// The most rows the splits of [`train_test_splits`] hold together (every split's history and
+/// window, which are built at once): more splits over a larger dataset are refused before any is
+/// built. 100,000 locations of ten years of monthly data with 7 splits make about 82 million.
+pub const MAX_SPLIT_ROWS: usize = 250_000_000;
+
+/// The rows the splits hold together: split `i` has every row up to its window's last period.
+fn split_rows(panel: &Panel, split_idx: usize, options: &Options) -> usize {
+    let mut per_period = vec![0usize; panel.periods.len()];
+    for &p in &panel.row_period {
+        if let Some(c) = per_period.get_mut(p) {
+            *c += 1;
+        }
+    }
+    let mut up_to = Vec::with_capacity(per_period.len());
+    let mut sum = 0usize;
+    for c in per_period {
+        sum += c;
+        up_to.push(sum);
+    }
+    (0..options.splits)
+        .map(|i| {
+            let end = split_idx + i * options.stride + options.periods;
+            up_to.get(end).copied().unwrap_or(sum)
+        })
+        .fold(0usize, usize::saturating_add)
 }
 
 /// One test window.
@@ -191,7 +235,7 @@ pub fn train_test_splits(
     let data = &prepared;
     let panel = Panel::new(data, options.prepare.fill_gaps)?;
     let n = panel.periods.len();
-    let window = options.window();
+    let window = options.window()?;
     let Some(split_idx) = n.checked_sub(window + 1) else {
         return Err(Error::invalid(format!(
             "{n} periods are too few for {} splits of {} periods with stride {}: need at least {}",
@@ -210,6 +254,14 @@ pub fn train_test_splits(
         (None, panel, Vec::new())
     };
     let data = kept.as_ref().unwrap_or(data);
+    let held = split_rows(&panel, split_idx, options);
+    if held > MAX_SPLIT_ROWS {
+        return Err(Error::invalid(format!(
+            "{} splits would hold {held} rows together, more than the limit of {MAX_SPLIT_ROWS}; \
+             use fewer splits or less data",
+            options.splits
+        )));
+    }
     let label = |i: usize| panel.labels.get(i).cloned().unwrap_or_default();
     let (train, _) = rows(data, &panel, |p| p <= split_idx)?;
     let splits = (0..options.splits)
@@ -320,7 +372,69 @@ mod tests {
             ..Options::default()
         };
         assert!(o.validate().is_err());
-        assert_eq!(Options::default().window(), 9);
+        assert_eq!(Options::default().window().unwrap(), 9);
+    }
+
+    /// A window that overflows `usize` is an error, not a wrapped (release) or panicking (debug)
+    /// computation.
+    #[test]
+    fn overflowing_window_is_an_error() {
+        use crate::weather::Climatology;
+        let o = Options {
+            periods: 1,
+            splits: (usize::MAX / 2) + 2,
+            stride: 2,
+            retrain: 1,
+            ..Options::default()
+        };
+        assert!(o.validate().is_err());
+        let mut data = DataFrame::new();
+        data.push_column(
+            cols::TIME_PERIOD,
+            chapkit_core::Column::from_strs(["2023-01", "2023-02", "2023-03"]),
+        )
+        .unwrap();
+        data.push_column(cols::LOCATION, chapkit_core::Column::from_strs(["A"; 3]))
+            .unwrap();
+        data.push_column(
+            cols::DISEASE_CASES,
+            chapkit_core::Column::Float(vec![Some(1.0); 3]),
+        )
+        .unwrap();
+        let e = train_test_splits(&data, &o, &Climatology)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("too large"), "{e}");
+    }
+
+    /// Many splits over a long range are refused before they are built.
+    #[test]
+    fn split_rows_are_bounded() {
+        use crate::weather::Climatology;
+        // Two rows 108,000 months apart, filled to 108,000; 50,000 splits would hold billions.
+        let mut data = DataFrame::new();
+        data.push_column(
+            cols::TIME_PERIOD,
+            chapkit_core::Column::from_strs(["1000-01", "9999-12"]),
+        )
+        .unwrap();
+        data.push_column(cols::LOCATION, chapkit_core::Column::from_strs(["A"; 2]))
+            .unwrap();
+        data.push_column(
+            cols::DISEASE_CASES,
+            chapkit_core::Column::Float(vec![Some(1.0); 2]),
+        )
+        .unwrap();
+        let o = Options {
+            periods: 1,
+            splits: 50_000,
+            ..Options::default()
+        };
+        let e = train_test_splits(&data, &o, &Climatology)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("more than the limit"), "{e}");
+        assert_eq!(retrain_points(usize::MAX, 3)[2], usize::MAX / 3 * 2);
     }
 
     #[test]

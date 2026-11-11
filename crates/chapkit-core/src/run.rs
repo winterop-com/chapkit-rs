@@ -25,6 +25,24 @@ impl RunInfo {
             ..Self::default()
         }
     }
+
+    /// A run with the given horizon and the config's `additional_continuous_covariates` (a
+    /// config's `data`, as the service resolves a run without a request's `run_info`).
+    pub fn for_config(prediction_periods: u32, config: &serde_json::Value) -> Self {
+        Self {
+            prediction_periods,
+            additional_continuous_covariates: config
+                .get("additional_continuous_covariates")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            future_covariate_origin: None,
+        }
+    }
 }
 
 /// A GeoJSON `FeatureCollection`, passed through untouched.

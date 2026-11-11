@@ -13,14 +13,14 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../api/client'
 import type { Frame } from '../api/types'
-import { canonicalPeriod, count, periodWord, when } from '../lib/format'
+import { count, periodWord, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
 import { LocationPicker } from '../parts'
 
 type Row = Record<string, string | number | null> & { _key: string }
 
-/** The rows of several frames as records, in period order. */
+/** The rows of several frames as records, in the order given. */
 function records(frames: readonly Frame[]): Row[] {
     return frames.flatMap((frame) =>
         frame.data.map((cells, index) => {
@@ -34,9 +34,12 @@ function records(frames: readonly Frame[]): Row[] {
     )
 }
 
-/** One dataset: its facts, its target over time for the locations chosen, and its rows. */
+/**
+ * One dataset: its facts, its target over time for the locations chosen, and its rows. Mounted
+ * afresh for each dataset (the app keys pages by route), so a choice of locations never carries over.
+ */
 export function DatasetPage({ id }: { id: string }) {
-    const dataset = useResource(() => api.dataset(id), [id])
+    const dataset = useResource((signal) => api.dataset(id, signal), [id])
     const meta = dataset.data
     const [chosen, setChosen] = useState<string[]>([])
     const [removing, setRemoving] = useState(false)
@@ -45,19 +48,20 @@ export function DatasetPage({ id }: { id: string }) {
         // Only the first locations, once the dataset has come.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [meta])
+    // The periods come as the service writes them, in period order: drawn as they come.
     const frames = useResource(
-        chosen.length === 0 ? null : () => api.datasetData(id, chosen),
-        [id, chosen.join('|')],
+        chosen.length === 0 ? null : (signal) => api.datasetData(id, { locations: chosen }, signal),
+        [id, chosen.join('\u0000')],
     )
     const rows = useMemo(() => records(frames.data === undefined ? [] : [frames.data]), [frames.data])
     const target = meta?.target ?? 'disease_cases'
     const spec = useMemo(
         () => ({
-            rows: rows.map((row) => ({ period: canonicalPeriod(String(row.time_period)), location: String(row.location), value: row[target] ?? null })),
+            rows: rows.map((row) => ({ period: String(row.time_period), location: String(row.location), value: row[target] ?? null })),
             x: 'period',
             y: 'value',
             series: 'location',
-            order: [...new Set(rows.map((row) => canonicalPeriod(String(row.time_period))))].sort(),
+            order: [...new Set(rows.map((row) => String(row.time_period)))],
             seriesOrder: chosen,
         }),
         [rows, target, chosen],
@@ -134,6 +138,9 @@ export function DatasetPage({ id }: { id: string }) {
                         legend={legend}
                         file={`${meta.name}-${target}`}
                         loading={frames.loading}
+                        error={frames.error?.message}
+                        technical={frames.error?.detail}
+                        onRetry={frames.reload}
                         empty={chosen.length === 0}
                         actions={<LocationPicker locations={meta.location_ids} value={chosen} onChange={setChosen} />}
                     >
@@ -151,7 +158,7 @@ export function DatasetPage({ id }: { id: string }) {
                             pageSizes={[25, 50, 100]}
                             bar={false}
                             minWidth="40rem"
-                            empty="Choose a location to see its rows."
+                            empty={frames.error ? `Could not read the rows: ${frames.error.message}` : 'Choose a location to see its rows.'}
                         />
                     </Section>
                     <ConfirmDialog

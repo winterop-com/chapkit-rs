@@ -102,13 +102,15 @@ shortcuts) and lists the same search's results under them.
 | ⌘K (Ctrl K off a Mac) | everywhere, in fields too | Open or close the command palette |
 | `/` | everywhere | Search datasets, runs and configs |
 | `?` | everywhere | Show the keyboard shortcuts |
-| `o` `d` `e` `f` `c` `j` `a` `s` | everywhere | Go to Overview, Datasets, Evaluate, Forecast, Configs, Jobs, Artifacts, System |
+| `g` then `o` `d` `e` `f` `c` `j` `a` `s` | everywhere | Go to Overview, Datasets, Evaluate, Forecast, Configs, Jobs, Artifacts, System |
 | `u` | Datasets | Upload a dataset |
 | `n` | Configs | New config |
 | ⌘Enter (Ctrl Enter) | Evaluate, Forecast, in their fields too | Run the evaluation or forecast |
 
-Single keys are quiet while typing in a field and while a dialog or menu is open. None needs Alt, so
-they work on a Norwegian keyboard as on an American one.
+Single keys and `g` sequences are quiet while typing in a field and while a dialog or menu is open;
+the second key of a sequence must come within a second, and Escape drops it. None needs Alt, so they
+work on a Norwegian keyboard as on an American one. ⌘K over an open search result list closes it and
+opens the palette.
 
 ## Screens
 

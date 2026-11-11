@@ -119,7 +119,7 @@ export function Configs({ opened }: { opened?: string }) {
                     </Button>
                 }
             />
-            <ReadState what="the model's options" resource={schema} />
+            <ReadState what="the model's options" resource={schema} tone="warning" />
             {configs.error ? <ReadState what="the configs" resource={configs} /> : <DataTable
                 columns={COLUMNS}
                 rows={configs.data ?? []}

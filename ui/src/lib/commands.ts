@@ -2,9 +2,12 @@ import type { PaletteCommand, PaletteGroup } from '@winterop-com/sokkel-ui/Comma
 import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
 import { Gauge, Keyboard, KeyRound, Plus, TrendingUp, Upload } from 'lucide-react'
 
+/** The first key of every way to a place: G, then the place's key. */
+export const GO_KEY = 'g'
+
 /**
- * The key that goes to each place from anywhere outside a field, the place's first letter where
- * it is free. None needs Alt on a Norwegian keyboard.
+ * The key after G that goes to each place from anywhere outside a field, the place's first letter
+ * where it is free. None needs Alt on a Norwegian keyboard.
  */
 export const PLACE_KEYS: Readonly<Record<string, string>> = {
     overview: 'o',
@@ -17,13 +20,13 @@ export const PLACE_KEYS: Readonly<Record<string, string>> = {
     system: 's',
 }
 
-/** The palette's places with the key that goes to each drawn at the row's end. */
+/** The palette's places with the keys that go to each, G and the place's key, drawn at the row's end. */
 export function withPlaceKeys(groups: readonly PaletteGroup[]): PaletteGroup[] {
     return groups.map((group) => ({
         ...group,
         commands: group.commands.map((command) => {
             const key = PLACE_KEYS[command.id.replace(/^place-/, '')]
-            return key === undefined ? command : { ...command, keys: keyLabels({ key }) }
+            return key === undefined ? command : { ...command, keys: [...keyLabels({ key: GO_KEY }), ...keyLabels({ key })] }
         }),
     }))
 }

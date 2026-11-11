@@ -79,7 +79,7 @@ function NewEvaluation({ onDone }: { onDone: (artifactId: string) => void }) {
         <Section title="New evaluation" description="Backtest the model on a dataset: train on the past, forecast the next periods, and score against what happened, split after split.">
             <Stack gap="lg">
                 <ReadState what="the datasets" resource={datasets} />
-                <ReadState what="the configs" resource={configs} />
+                <ReadState what="the configs" resource={configs} tone="warning" />
                 {noData ? (
                     <Problem
                         tone="warning"

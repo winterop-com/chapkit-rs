@@ -22,7 +22,7 @@ import { createContext, Fragment, lazy, Suspense, useContext, useMemo, useState,
 import { api } from './api/client'
 import type { Health, Info } from './api/types'
 import { dismissKeyRequest, setApiKey, useApiKey } from './lib/apikey'
-import { actionCommands, PLACE_KEYS, withPlaceKeys } from './lib/commands'
+import { actionCommands, GO_KEY, PLACE_KEYS, withPlaceKeys } from './lib/commands'
 import { useResource } from './lib/resource'
 import { go, useRoute } from './lib/router'
 import { resultRoute, searchService } from './lib/search'
@@ -122,12 +122,13 @@ function ApiKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
     )
 }
 
-/** The keys that go to each place, bound inside the shell so its shortcuts dialog lists them. */
+/** G then a place's key goes to the place, bound inside the shell so its shortcuts dialog lists them. */
 function PlaceKeys() {
     useShortcuts(
         PLACES.filter((place) => PLACE_KEYS[place.id] !== undefined).map((place) => ({
             id: `go-${place.id}`,
-            key: PLACE_KEYS[place.id]!,
+            key: GO_KEY,
+            next: PLACE_KEYS[place.id]!,
             label: `Go to ${place.label}`,
             group: 'Go to',
             run: () => go(place.id === 'overview' ? '/' : `/${place.id}`),
@@ -139,9 +140,6 @@ function PlaceKeys() {
 
 /** Opens a record a search found. */
 const openFound = (result: { id: string }, group: { kind: string }) => go(resultRoute(group.kind, result.id))
-
-/** The palette opens where nothing stands over the page, or over the top bar's search, which it replaces. */
-const openOver = (over: Element | null) => over === null || over.getAttribute('data-slot') === 'search-results'
 
 const SEARCH_WORDS = { placeholder: 'Search datasets, runs and configs' }
 
@@ -238,7 +236,6 @@ export function App() {
                     if (open) setSearching(false)
                     setPaletteOpen(open)
                 }}
-                mayOpenPalette={openOver}
                 paletteFilter="terms"
                 paletteSearch={{ search: searchService, onOpen: openFound }}
                 paletteWords={{ placeholder: 'Go to a page, run an action, or find a dataset, run or config' }}

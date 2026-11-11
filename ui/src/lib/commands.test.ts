@@ -1,14 +1,15 @@
 import { expect, test } from 'bun:test'
 
-import { actionCommands, PLACE_KEYS, withPlaceKeys } from './commands'
+import { actionCommands, GO_KEY, PLACE_KEYS, withPlaceKeys } from './commands'
 
-test('place keys are single letters that need no Alt on a Norwegian keyboard, one place each', () => {
+test('place keys follow G, are single letters that need no Alt on a Norwegian keyboard, one place each', () => {
+    expect(GO_KEY).toBe('g')
     const keys = Object.values(PLACE_KEYS)
     expect(new Set(keys).size).toBe(keys.length)
     for (const key of keys) expect(key).toMatch(/^[a-z]$/)
 })
 
-test('the palette shows each place\'s key, and leaves other commands alone', () => {
+test('the palette shows G then each place\'s key, and leaves other commands alone', () => {
     const noop = () => {}
     const [group] = withPlaceKeys([
         {
@@ -19,7 +20,7 @@ test('the palette shows each place\'s key, and leaves other commands alone', () 
             ],
         },
     ])
-    expect(group!.commands.map((command) => command.keys)).toEqual([['D'], undefined])
+    expect(group!.commands.map((command) => command.keys)).toEqual([['G', 'D'], undefined])
 })
 
 test('the actions go to their pages, ask for the key and show the shortcuts', () => {

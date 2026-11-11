@@ -3,7 +3,7 @@ import { ChartFrame } from '@winterop-com/sokkel-ui-charts/ChartFrame'
 import { chartLegend } from '@winterop-com/sokkel-ui-charts/chart-legend'
 import { FilterChip } from '@winterop-com/sokkel-ui/FilterChip'
 import { LoadingBar } from '@winterop-com/sokkel-ui/Loaders'
-import { PageState } from '@winterop-com/sokkel-ui/PageState'
+import { PageState, type PageStateTone } from '@winterop-com/sokkel-ui/PageState'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { StatusChip } from '@winterop-com/sokkel-ui/StatusChip'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
@@ -32,8 +32,11 @@ export const WEATHER = [
     { value: 'observed', label: 'Observed (oracle)' },
 ]
 
-/** A read's failure, said with what failed and a retry; the children while it has not failed. */
-export function ReadState({ what, resource, children }: { what: string; resource: Resource<unknown>; children?: ReactNode }) {
+/**
+ * A read's failure, said with what failed and a retry; the children while it has not failed. `warning`
+ * draws a read of secondary data the page stands without, in the warning tone.
+ */
+export function ReadState({ what, resource, tone, children }: { what: string; resource: Resource<unknown>; tone?: PageStateTone; children?: ReactNode }) {
     const error = resource.error
     return (
         <PageState
@@ -41,6 +44,7 @@ export function ReadState({ what, resource, children }: { what: string; resource
             error={error === undefined ? undefined : `Could not read ${what}: ${error.detail ?? error.message}`}
             status={error?.status}
             onRetry={resource.reload}
+            tone={tone}
         >
             {children}
         </PageState>
@@ -287,6 +291,6 @@ export function useHistory(
 export function HistoryNote({ dataset, history }: { dataset: Resource<Dataset> | undefined; history: Resource<unknown> }) {
     if (dataset?.error?.status === 404)
         return <Problem tone="warning" title="The dataset this came from is gone" detail="The charts show the forecasts without the history before them." />
-    if (dataset?.error !== undefined) return <ReadState what="the dataset" resource={dataset} />
-    return <ReadState what="the observed history" resource={history} />
+    if (dataset?.error !== undefined) return <ReadState what="the dataset" resource={dataset} tone="warning" />
+    return <ReadState what="the observed history" resource={history} tone="warning" />
 }

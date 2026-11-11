@@ -60,7 +60,7 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
         <Section title="New forecast" description="Train on the whole dataset and forecast the periods after its last one.">
             <Stack gap="lg">
                 <ReadState what="the datasets" resource={datasets} />
-                <ReadState what="the configs" resource={configs} />
+                <ReadState what="the configs" resource={configs} tone="warning" />
                 {noData ? (
                     <Problem
                         tone="warning"

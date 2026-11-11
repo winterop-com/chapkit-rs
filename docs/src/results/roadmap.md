@@ -38,9 +38,10 @@ Next:
   Modeling App remains the tool for comparing models across a country.
   Built with [sokkel-ui](https://github.com/winterop-com/sokkel-ui) (React components on Base UI, with charts
   and maps), served by the model binary; a component it lacks is added to sokkel-ui, not built in the app.
-  In progress ([guide](../guide/ui.md)): the backend is done (stored datasets, `$backtest` on a stored
-  dataset with every forecast's quantiles against the truth, `$forecast` past the end of the data, artifacts
-  by type, the UI embedded and served at `/ui/`); the frontend is being built.
+  Shipped in 0.5.0 ([guide](../guide/ui.md)), served at `/ui/` by every model binary: stored datasets with
+  upload and charts, evaluations (`$backtest` on a stored dataset, scores by horizon and location, forecasts
+  against the truth), forecasts (`$forecast` past the end of the data), configs, jobs, artifacts, system and API
+  pages. Released without a design review; 0.6.0 reviews it with the user and fixes what that finds.
 
 - **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
   the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by

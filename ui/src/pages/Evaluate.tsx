@@ -190,7 +190,7 @@ function EvaluationView({ id }: { id: string }) {
     const shown = useMemo(() => forecasts.filter((row) => String(row.split) === split && chosen.includes(row.location)), [forecasts, split, chosen])
     const fans = useMemo(() => {
         const out = new Map<string, FanPoint[]>()
-        for (const row of shown) out.set(row.location, [...(out.get(row.location) ?? []), { ...row, period: row.time_period }])
+        for (const row of shown) out.set(row.location, [...(out.get(row.location) ?? []), { ...row, period: row.time_period, ahead: row.horizon }])
         return out
     }, [shown])
     // A split's forecasts start together; the service picks the history before them.

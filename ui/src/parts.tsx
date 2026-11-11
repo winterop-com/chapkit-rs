@@ -177,9 +177,12 @@ export function LocationPicker({
     return <FilterChip facet="Locations" multiple search options={options} selected={value} onSelectedChange={onChange} />
 }
 
-/** One period of a fan: the median and its intervals, and what was observed. */
+/** One period of a fan: the median and its intervals, what was observed, and where and how far ahead it was forecast. */
 export type FanPoint = {
     period: string
+    location?: string
+    /** Periods ahead of the forecast's start, from 1; absent for the history before it. */
+    ahead?: number
     observed?: number | null
     median?: number | null
     q10?: number | null
@@ -189,7 +192,19 @@ export type FanPoint = {
 }
 
 /** A fan's fields as its legend, tooltips and data view name them. */
-const FAN_NAMES = { period: 'Period', median: 'Median', observed: 'Observed', q10: '10th', q25: '25th', q75: '75th', q90: '90th' }
+const FAN_NAMES = {
+    period: 'Period',
+    median: 'Median',
+    observed: 'Observed',
+    q10: '10th',
+    q25: '25th',
+    q75: '75th',
+    q90: '90th',
+    location: 'Location',
+    ahead: 'Periods ahead',
+}
+/** What a fan's data view shows beside the drawn figures. */
+const FAN_DATA_FIELDS = ['location', 'ahead']
 const FAN_FORMAT = (value: number) => score(value)
 
 const BANDS = [
@@ -209,6 +224,7 @@ export function fanSpec(points: readonly FanPoint[], start?: string) {
         points: 'observed',
         history: 'observed',
         fieldNames: FAN_NAMES as Record<string, string>,
+        dataFields: FAN_DATA_FIELDS,
         format: FAN_FORMAT,
         marks: first === undefined ? [] : [{ x: first, label: 'Forecast' }],
     }
@@ -279,7 +295,7 @@ export function useHistory(
                   for (const cells of frame.data) {
                       const at = String(cells[location])
                       const observed = cells[value]
-                      out.set(at, [...(out.get(at) ?? []), { period: String(cells[period]), observed: typeof observed === 'number' ? observed : null }])
+                      out.set(at, [...(out.get(at) ?? []), { period: String(cells[period]), location: at, observed: typeof observed === 'number' ? observed : null }])
                   }
                   return out
               },

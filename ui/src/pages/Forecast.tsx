@@ -128,6 +128,8 @@ function ForecastView({ id }: { id: string }) {
     const fans = useMemo(() => {
         const out = new Map<string, FanPoint[]>()
         for (const row of rows) out.set(row.location, [...(out.get(row.location) ?? []), { ...row, period: row.time_period }])
+        // Periods ahead: each location's periods in order, from 1.
+        for (const points of out.values()) points.sort((a, b) => a.period.localeCompare(b.period)).forEach((point, at) => (point.ahead = at + 1))
         return out
     }, [rows])
     const first = useMemo(() => rows.map((row) => row.time_period).sort()[0], [rows])

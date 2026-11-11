@@ -240,7 +240,12 @@ export function App() {
                     setPaletteOpen(open)
                 }}
                 paletteFilter="terms"
-                paletteSearch={{ search: searchService, onOpen: openFound, words: { failed: searchFailed } }}
+                paletteSearch={{
+                    search: searchService,
+                    onOpen: openFound,
+                    onSeeAll: (query) => go(searchRoute(query)),
+                    words: { failed: searchFailed },
+                }}
                 paletteWords={{ placeholder: 'Go to a page, run an action, or find a dataset, run or config' }}
                 paletteFoot={{ mark: <Mark />, name: 'Modeling' }}
                 shortcuts={[]}

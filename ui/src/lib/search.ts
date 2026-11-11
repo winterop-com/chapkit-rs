@@ -35,6 +35,9 @@ export function resultRoute(kind: string, id: string): string {
     return `/configs/${id}`
 }
 
+/** Says a search failed, with the reason the service gave, in the top bar's search and the palette. */
+export const searchFailed = (reason: string): string => `The search did not answer: ${reason}`
+
 /** The address of the full results for a query, which keeps the query. */
 export const searchRoute = (query: string): string => `/search?q=${encodeURIComponent(query.trim())}`
 

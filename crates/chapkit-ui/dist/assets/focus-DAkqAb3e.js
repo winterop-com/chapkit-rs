@@ -1,0 +1,1 @@
+function e(e){return e===`keyboard`||e===``}export{e as t};

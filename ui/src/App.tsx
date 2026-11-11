@@ -25,7 +25,7 @@ import { dismissKeyRequest, setApiKey, useApiKey } from './lib/apikey'
 import { actionCommands, placeBinding, withPlaceKeys } from './lib/commands'
 import { useResource } from './lib/resource'
 import { go, useRoute } from './lib/router'
-import { resultRoute, searchRoute, searchService } from './lib/search'
+import { resultRoute, searchFailed, searchRoute, searchService } from './lib/search'
 
 // Each page loads the first time it is opened.
 const ApiPage = lazy(() => import('./pages/ApiPage').then((module) => ({ default: module.ApiPage })))
@@ -140,7 +140,7 @@ function PlaceKeys() {
 /** Opens a record a search found. */
 const openFound = (result: { id: string }, group: { kind: string }) => go(resultRoute(group.kind, result.id))
 
-const SEARCH_WORDS = { placeholder: 'Search datasets, runs and configs' }
+const SEARCH_WORDS = { placeholder: 'Search datasets, runs and configs', failed: searchFailed }
 
 function healthNote(health: Health | undefined, failed: boolean): { note: string; tone?: 'warn' | 'error' } {
     if (failed) return { note: 'Service not answering', tone: 'error' }
@@ -217,7 +217,10 @@ export function App() {
         content = (
             <Empty>
                 <EmptyHeader>
-                    <EmptyTitle>Nothing at this address</EmptyTitle>
+                    {/* The page's heading, where the focus lands on arriving. */}
+                    <EmptyTitle>
+                        <h1>Nothing at this address</h1>
+                    </EmptyTitle>
                     <EmptyDescription>There is no page at #/{route.join('/')}.</EmptyDescription>
                 </EmptyHeader>
                 <Button size="sm" variant="outline" onClick={() => go('/')}>
@@ -237,13 +240,14 @@ export function App() {
                     setPaletteOpen(open)
                 }}
                 paletteFilter="terms"
-                paletteSearch={{ search: searchService, onOpen: openFound }}
+                paletteSearch={{ search: searchService, onOpen: openFound, words: { failed: searchFailed } }}
                 paletteWords={{ placeholder: 'Go to a page, run an action, or find a dataset, run or config' }}
                 paletteFoot={{ mark: <Mark />, name: 'Modeling' }}
                 shortcuts={[]}
                 shortcutsOpen={showingKeys}
                 onShortcutsOpenChange={setShowingKeys}
                 route={route.join('/')}
+                routeKey={route.join('/')}
                 banner={
                     info.error !== undefined && info.error.status !== 401 ? (
                         <Banner tone="critical" actions={<Button size="xs" variant="outline" onClick={info.reload}>Try again</Button>}>

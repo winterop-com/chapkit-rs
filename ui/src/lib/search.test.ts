@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 
 import type { Artifact, Config, Dataset, EvaluationSummary, ForecastSummary, Page } from '../api/types'
-import { findPages, joinFound, nextPages, resultRoute, searchGroups, searchService, unnamed, type Found } from './search'
+import { findPages, joinFound, nextPages, resultRoute, searchFailed, searchGroups, searchService, unnamed, type Found } from './search'
 
 const page = <T>(items: T[], total = items.length): Page<T> => ({ items, total, page: 1, size: 5, pages: 1 })
 
@@ -89,6 +89,14 @@ test('a search asks the service for a few of each kind by name, and the names of
     ])
     expect(urls[4]).toBe('/api/v1/datasets/D9')
     expect(groups[1]!.results[0]!.title).toBe('laos weekly')
+})
+
+test('a refused search rejects with the service\'s title, which the search and the palette say with a Retry', async () => {
+    globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ title: 'Internal Server Error' }), { status: 500, headers: { 'content-type': 'application/problem+json' } })) as typeof fetch
+    const failure = await searchService('laos', new AbortController().signal).catch((reason: unknown) => reason)
+    expect(failure).toBeInstanceOf(Error)
+    expect(searchFailed((failure as Error).message)).toBe('The search did not answer: Internal Server Error')
 })
 
 test('the full results read on: the next page of each kind with more, joined after the pages before', async () => {

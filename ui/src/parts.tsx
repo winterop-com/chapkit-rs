@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { aborted, ApiError, api, asApiError } from './api/client'
 import type { Config, Dataset, Job, JobSubmitted } from './api/types'
-import { took } from './lib/format'
+import { score, took } from './lib/format'
 import { pollDelay, useResource, type Resource } from './lib/resource'
 
 /** A choice of one of a few values, as a labeled field (sokkel-ui 0.15.7). */
@@ -184,10 +184,31 @@ export type FanPoint = {
     q90?: number | null
 }
 
+/** A fan's fields as its legend, tooltips and data view name them. */
+const FAN_NAMES = { period: 'Period', median: 'Median', observed: 'Observed', q10: '10th', q25: '25th', q75: '75th', q90: '90th' }
+const FAN_FORMAT = (value: number) => score(value)
+
 const BANDS = [
     { low: 'q10', high: 'q90' },
     { low: 'q25', high: 'q75' },
 ]
+
+/** What a fan draws from its points: periods in order, the fields named and figures written as scores, and where the forecast starts. */
+export function fanSpec(points: readonly FanPoint[], start?: string) {
+    const rows = [...points].sort((a, b) => a.period.localeCompare(b.period))
+    const first = start ?? rows.find((row) => row.median !== undefined && row.median !== null)?.period
+    return {
+        rows,
+        x: 'period',
+        y: 'median',
+        bands: BANDS,
+        points: 'observed',
+        history: 'observed',
+        fieldNames: FAN_NAMES as Record<string, string>,
+        format: FAN_FORMAT,
+        marks: first === undefined ? [] : [{ x: first, label: 'Forecast' }],
+    }
+}
 
 /**
  * A forecast as a fan: the observed history as a line, then the median with its 10-90 and 25-75
@@ -209,20 +230,7 @@ export function FanChart({
     start?: string
     loading?: boolean
 }) {
-    const spec = useMemo(() => {
-        const rows = [...points].sort((a, b) => a.period.localeCompare(b.period))
-        const first = start ?? rows.find((row) => row.median !== undefined && row.median !== null)?.period
-        return {
-            rows,
-            x: 'period',
-            y: 'median',
-            bands: BANDS,
-            points: 'observed',
-            history: 'observed',
-            fieldNames: { median: 'Median', observed: 'Observed', period: 'Period' },
-            marks: first === undefined ? [] : [{ x: first, label: 'Forecast' }],
-        }
-    }, [points, start])
+    const spec = useMemo(() => fanSpec(points, start), [points, start])
     const legend = useMemo(() => chartLegend('fan', spec), [spec])
     return (
         <ChartFrame bodyClassName="h-64" title={title} subtitle={subtitle} file={file} legend={legend} loading={loading} empty={points.length === 0}>

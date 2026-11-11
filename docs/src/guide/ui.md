@@ -137,7 +137,7 @@ column (`disease_cases` by default).
 ![Evaluate, dark](ui/evaluate-dark.png)
 
 **An evaluation**: CRPS, MAE, RMSE and coverage, the scores by horizon and by location, and each split's
-forecasts against what happened.
+forecasts against what happened. A chart's Data button, here and on every page, shows its rows as a table.
 
 ![An evaluation, light](ui/evaluation-light.png)
 ![An evaluation, dark](ui/evaluation-dark.png)

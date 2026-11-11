@@ -18,7 +18,7 @@ import { Download, Play } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../api/client'
-import type { Artifact, BacktestForecast, Evaluation, EvaluationSummary, MetricId } from '../api/types'
+import type { Artifact, Evaluation, EvaluationSummary, MetricId } from '../api/types'
 import { count, METRICS, metricName, score, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go, hashParam } from '../lib/router'
@@ -161,25 +161,6 @@ const pastColumns = (names: ReadonlyMap<string, string>): DataColumn<Past>[] => 
             width: '8.5rem',
             align: 'end',
             cell: (row) => <span className="tabular-nums">{score(row.data.summary?.aggregate[id], id.startsWith('coverage'))}</span>,
-        }),
-    ),
-]
-
-/** One forecast of a split, as its row in the values table. */
-type ValueRow = BacktestForecast
-
-const VALUE_COLUMNS: DataColumn<ValueRow>[] = [
-    { id: 'location', header: 'Location', width: 'minmax(10rem,1.5fr)', cell: (row) => <span className="font-mono text-xs">{row.location}</span>, sortValue: (row) => row.location },
-    { id: 'period', header: 'Period', width: 'minmax(7rem,1fr)', cell: (row) => <span className="font-mono text-xs">{row.time_period}</span>, sortValue: (row) => row.time_period },
-    { id: 'horizon', header: 'Ahead', width: '5rem', align: 'end', cell: (row) => <span className="tabular-nums">{row.horizon}</span>, sortValue: (row) => row.horizon },
-    ...(['observed', 'median', 'q10', 'q25', 'q75', 'q90'] as const).map(
-        (key): DataColumn<ValueRow> => ({
-            id: key,
-            header: key === 'observed' ? 'Observed' : key === 'median' ? 'Median' : `${key.slice(1)}th`,
-            width: '6.5rem',
-            align: 'end',
-            cell: (row) => <span className="tabular-nums">{score(row[key])}</span>,
-            sortValue: (row) => row[key] ?? Number.NEGATIVE_INFINITY,
         }),
     ),
 ]
@@ -371,21 +352,6 @@ function EvaluationView({ id }: { id: string }) {
                             </Stack>
                         )}
                     </Section>
-                    {forecasts.length > 0 && (
-                        <Section title="Values" meta={`${count(shown.length)} forecasts of split ${Number(split) + 1}, for the locations chosen`} flush>
-                            <DataTable
-                                columns={VALUE_COLUMNS}
-                                rows={shown}
-                                rowKey={(row) => `${row.location}:${row.time_period}`}
-                                framed={false}
-                                bar={false}
-                                paging="client"
-                                defaultPageSize={25}
-                                minWidth="56rem"
-                                empty="Choose a location to see its forecasts."
-                            />
-                        </Section>
-                    )}
                 </Stack>
             )}
         </PageState>

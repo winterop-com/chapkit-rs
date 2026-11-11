@@ -63,6 +63,7 @@ export function DatasetPage({ id }: { id: string }) {
             series: 'location',
             order: [...new Set(rows.map((row) => String(row.time_period)))],
             seriesOrder: chosen,
+            fieldNames: { period: 'Period', location: 'Location', value: target },
         }),
         [rows, target, chosen],
     )

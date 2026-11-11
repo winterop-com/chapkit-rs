@@ -68,8 +68,10 @@ locations), the splits, and the metrics (`aggregate`, `by_horizon`, `by_location
 configurable-baseline eval --data laos.csv --json | jq .aggregate.crps
 ```
 
-`$backtest` runs the same backtest as a job of a running service and stores this JSON as an
-`ml_backtest` artifact ([HTTP endpoints](../reference/endpoints.md)).
+`forecasts` lists every forecast with its split, horizon, observed target and the median and 10th, 25th,
+75th and 90th percentiles of its samples. `$backtest` runs the same backtest as a job of a running service,
+on the data it is sent or a stored dataset, and stores this JSON as an `ml_backtest` artifact
+([The web UI](ui.md), [HTTP endpoints](../reference/endpoints.md)).
 
 ## From Rust
 
@@ -128,11 +130,8 @@ at splits `{(j * splits) / N}`: the first on the training set, the later ones on
 |---|---|
 | `climatology` (default) | per location and covariate, the mean of each month (or week; week 53 counts as 52) of the history. A season never observed gets the mean of the observed seasons' means, as chap-core's regression gives. `population` and text columns are carried forward from each location's last row. |
 | `damped_persistence` (`--weather damped-persistence`) | the climatology plus the last anomaly from it, damped with the horizon: `climatology(T+h) + phi^h * (y(T) - climatology(T))`, with `phi` the lag-1 autocorrelation of the location's anomaly series, clipped to [0, 1]. The reference forecast chap-core recommends over plain climatology. As in chap-core, a covariate missing anywhere in a location's history gives a missing forecast for it. |
+| `mstl_arima` (`--weather mstl-arima`) | chap-core's MSTL + ARIMA, ported from the statsmodels code it runs: per location and covariate, the seasonal component from MSTL (one STL pass, seasonal window 11), an ARIMA on the rest with `d` from KPSS (at most 2) and `p, q` in 0..3 by AICc, candidates with a root within 1.001 of the unit circle rejected (ARIMA(0,0,0) if none is left), and the seasonal component continued as the mean of the complete cycles. Needs more than two full cycles of history (25 months, 105 weeks); a covariate missing anywhere in a location's history gives a missing forecast for it. |
 | `observed` | the covariates as observed in the window. Looks ahead: for diagnostics only, the scores are not comparable to production. |
-
-chap-core's MSTL + ARIMA provider is not ported: it forecasts each series with statsforecast's AutoARIMA,
-a stepwise search over ARIMA orders with its own estimation and model selection, and a port that matches it
-number for number is a project of its own.
 
 **Metrics**, with chap-core's definitions: CRPS (the order-statistic estimator), CRPS on `log1p` values,
 CRPS divided by the range of the observations, MAE, RMSE and MAPE of the sample median, coverage of the
@@ -141,10 +140,10 @@ CRPS divided by the range of the observations, MAE, RMSE and MAPE of the sample 
 observed. The aggregate is the mean over all (location, period, split) rows, skipping undefined values (MAPE
 of a zero), and the root mean square for RMSE.
 
-Two details follow chap-core's REST API, which stores the aggregate the Modeling App shows: the CRPS
-normalisation uses the range of every observed target in the dataset (`chap evaluate` on the command line
-uses the test windows only), and RMSE by horizon or location is the root mean square per group (chap-core
-2.7.0's own grouped RMSE fails).
+The CRPS normalisation follows chap-core's REST API, which stores the aggregate the Modeling App shows: it
+uses the range of every observed target in the dataset (`chap evaluate` on the command line uses the test
+windows only). RMSE by horizon or location is the root mean square per group. With nothing to score,
+chap-core 2.7.0's grouped RMSE raises where its MAE returns no rows.
 
 **Target masking** (`chapkit::eval::mask_target`): inside masked ranges `disease_cases` is hidden and
 `target_masked` is 1; the window's future has it at 0, and a masked period inside the evaluation window is
@@ -177,13 +176,31 @@ The tests in `crates/chapkit-eval/tests/parity.rs` check, for each case:
 | every split's windows (train end, history end, forecast periods) | exact | - |
 | the locations dropped as untrained | exact | - |
 | the future frame from the climatology, damped persistence and observed providers | 1e-9 relative | below 1e-13 |
+| the future frame from MSTL + ARIMA | 1e-3 relative | 3.8e-4 |
 | every metric (aggregate, by horizon, by location) from chap-core's forecasts of `seasonal_median` and two test models | 1e-12 relative | 1.4e-15 |
 | whole backtests of the two test models (repeated in Rust; one counts periods since the last observation): forecasts and metrics | 1e-12 relative | 5.0e-16 |
 
 A duplicate row is rejected, and with `--keep-gaps --no-pad` the periods-since-last-observation model no
 longer matches chap-core (a test pins both).
 
-The remaining differences are summation order (numpy sums pairwise).
+The remaining differences are summation order (numpy sums pairwise), and for MSTL + ARIMA where
+statsmodels' optimiser stops: some fits end at its 50-iteration limit before converging.
+
+`scripts/gen_mstl_arima_fixtures.py` (also run by `make eval-fixtures`) records every stage of chap-core's
+MSTL + ARIMA provider on 14 monthly and weekly series. The test in
+`crates/chapkit-eval/src/weather/mstl_arima.rs` checks them stage by stage:
+
+| stage | agreement |
+|---|---|
+| MSTL seasonal component | 6e-14 relative |
+| `d` from KPSS | every series |
+| the chosen `(p, d, q)` | every series with a noisy deseasonalised series (11 of 14) |
+| forecasts | 4e-6 where statsmodels converged; 1.6e-3 where it stopped at 50 iterations |
+
+The three series that differ in order are almost exactly predictable after deseasonalising: a constant, a
+straight line and a dry series with one storm. Their likelihood grows without bound as the variance goes
+to zero, so where statsmodels stops, and which candidates pass the root check, is down to rounding. The
+constant series still forecasts the constant.
 
 ## Speed
 

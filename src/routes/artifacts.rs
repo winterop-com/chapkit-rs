@@ -35,7 +35,11 @@ async fn fetch(s: &AppState, id: &str) -> ApiResult<ArtifactOut> {
 fn node(a: ArtifactOut, children: Option<Vec<ArtifactTreeNode>>) -> ArtifactTreeNode {
     // Analysis results are roots of their own kind, not trainings.
     let label = match str_field(&a.data, "type") {
-        Some(t @ (crate::analysis::BACKTEST_TYPE | crate::analysis::HPO_TYPE)) => t.to_owned(),
+        Some(
+            t @ (crate::analysis::BACKTEST_TYPE
+            | crate::analysis::HPO_TYPE
+            | crate::analysis::FORECAST_TYPE),
+        ) => t.to_owned(),
         _ => level_label(a.level),
     };
     ArtifactTreeNode {
@@ -49,23 +53,40 @@ fn node(a: ArtifactOut, children: Option<Vec<ArtifactTreeNode>>) -> ArtifactTree
     }
 }
 
-/// List artifact summaries (`data` without `content`).
-#[utoipa::path(get, path = "", tag = "Artifacts", params(PageParams),
+/// `page` and `size`, plus the chapkit-rs filter `type`.
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::IntoParams)]
+struct ListParams {
+    /// Page number, starting at 1.
+    page: Option<i64>,
+    /// Page size, 1-100.
+    size: Option<i64>,
+    /// Only artifacts whose `data.type` is this (`ml_training`, `ml_prediction`, `ml_backtest`,
+    /// `ml_forecast`, ...). chapkit-rs extension.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+}
+
+/// List artifact summaries (`data` without `content`), optionally of one `type`.
+#[utoipa::path(get, path = "", tag = "Artifacts", params(ListParams),
     responses((status = OK, body = ListOrPage<ArtifactOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
 async fn list(
     State(s): State<AppState>,
-    Query(p): Query<PageParams>,
+    Query(p): Query<ListParams>,
 ) -> ApiResult<ListOrPage<ArtifactOut>> {
-    let paging = p.resolve()?;
+    let paging = PageParams {
+        page: p.page,
+        size: p.size,
+    }
+    .resolve()?;
     let page = paging.map(|(page, size)| Page {
         offset: chapkit_http::extract::page_offset(page, size),
         limit: size,
     });
-    let (rows, total) = s
-        .store()
-        .list_artifacts(page)
-        .await
-        .map_err(store_problem)?;
+    let (rows, total) = match p.kind.as_deref() {
+        Some(kind) => s.store().list_artifacts_of_type(kind, page).await,
+        None => s.store().list_artifacts(page).await,
+    }
+    .map_err(store_problem)?;
     let items: Vec<ArtifactOut> = rows
         .into_iter()
         .map(|r| ArtifactOut {
@@ -86,7 +107,7 @@ async fn create(
     validate_tags(&b.tags)?;
     let id = match &b.id {
         Some(raw) => parse_ulid(raw)?.to_string(),
-        None => ulid::Ulid::generate().to_string(),
+        None => chapkit_http::ids::new_id().to_string(),
     };
     if let Some(p) = &b.parent_id {
         parse_ulid(p)?;

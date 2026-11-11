@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use chapkit_store::{ConfigRow, NewArtifact, Page, Store, StoreError};
+use chapkit_store::{ConfigRow, DatasetRow, NewArtifact, Page, Store, StoreError};
 use serde_json::json;
 
 fn cfg(id: &str) -> ConfigRow {
@@ -107,9 +107,74 @@ async fn artifact_tree_links_and_cascade(s: Arc<dyn Store>) {
     assert!(!s.delete_config("C1").await.unwrap());
 }
 
+fn dataset(id: &str) -> DatasetRow {
+    DatasetRow {
+        id: id.into(),
+        name: "d".into(),
+        meta: json!({"rows": 2, "target": "disease_cases"}),
+        created_at: "2026-01-01T00:00:00".into(),
+        updated_at: "2026-01-01T00:00:00".into(),
+    }
+}
+
+async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
+    s.insert_dataset(dataset("D1"), b"{\"columns\": []}".to_vec())
+        .await
+        .unwrap();
+    assert!(matches!(
+        s.insert_dataset(dataset("D1"), vec![]).await,
+        Err(StoreError::Conflict(_))
+    ));
+    s.insert_dataset(dataset("D2"), vec![7; 3]).await.unwrap();
+    assert_eq!(s.get_dataset("D1").await.unwrap().unwrap(), dataset("D1"));
+    assert!(s.get_dataset("D9").await.unwrap().is_none());
+    assert_eq!(s.dataset_data("D2").await.unwrap(), Some(vec![7; 3]));
+    assert_eq!(s.dataset_data("D9").await.unwrap(), None);
+    let (rows, total) = s
+        .list_datasets(Some(Page {
+            offset: 1,
+            limit: 5,
+        }))
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "D2"));
+    assert!(s.delete_dataset("D1").await.unwrap());
+    assert!(!s.delete_dataset("D1").await.unwrap());
+    assert_eq!(s.list_datasets(None).await.unwrap().1, 1);
+
+    for (id, kind) in [
+        ("T1", "ml_backtest"),
+        ("T2", "ml_training"),
+        ("T3", "ml_backtest"),
+    ] {
+        let mut a = art(id, None);
+        a.data = json!({"type": kind});
+        s.insert_artifact(a).await.unwrap();
+    }
+    let (rows, total) = s.list_artifacts_of_type("ml_backtest", None).await.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(
+        rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["T1", "T3"]
+    );
+    let (rows, total) = s
+        .list_artifacts_of_type(
+            "ml_backtest",
+            Some(Page {
+                offset: 1,
+                limit: 1,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "T3"));
+    assert_eq!(s.list_artifacts_of_type("nope", None).await.unwrap().1, 0);
+}
+
 async fn suite(s: impl Fn() -> Arc<dyn Store>) {
     configs_crud_and_conflict(s()).await;
     artifact_tree_links_and_cascade(s()).await;
+    datasets_crud_and_artifact_types(s()).await;
 }
 
 #[tokio::test]
@@ -144,6 +209,8 @@ async fn sqlite_file_and_urls() {
 async fn turso_in_memory() {
     configs_crud_and_conflict(chapkit_store::open(Some("turso::memory:")).await.unwrap()).await;
     artifact_tree_links_and_cascade(chapkit_store::open(Some("turso::memory:")).await.unwrap())
+        .await;
+    datasets_crud_and_artifact_types(chapkit_store::open(Some("turso::memory:")).await.unwrap())
         .await;
 }
 

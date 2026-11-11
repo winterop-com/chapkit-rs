@@ -20,6 +20,8 @@ when a call is a plain function call, not a 2-3 s job round trip.
 - `crates/chapkit-http`: HTTP plumbing with no model knowledge: problem+json errors, job scheduler,
   health, system, info, API keys, request ids, orchestrator registration, OpenAPI.
 - `crates/chapkit-store`: async `Store` trait and its SQLite backend (rusqlite); no HTTP.
+- `crates/chapkit-ts`: pure time-series code (`chapkit::ts`): STL, KPSS, R's `stats::arima` and fable's
+  ARIMA search (parity: `make arima-fixtures`), and statsmodels' ARIMA for the MSTL + ARIMA weather.
 - `crates/chapkit-eval`: pure like `chapkit-core`: chap-core's backtest (splits, future weather, metrics, target
   masking) over any `Model`, checked against fixtures from chap-core (`make eval-fixtures`); behind `<bin> eval`.
 - `crates/chapkit-flow`: chap-core's flow as a test against a running service over HTTP; used by `chapkit-rs test`

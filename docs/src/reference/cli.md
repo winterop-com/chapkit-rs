@@ -170,7 +170,7 @@ Usage: my-model eval [OPTIONS]
       --splits <SPLITS>        Splits [default: 7]
       --stride <STRIDE>        Periods between splits [default: 1]
       --retrain <RETRAIN>      Trainings [default: 1]
-      --weather <WEATHER>      Future weather (observed looks ahead) [default: climatology] [possible values: climatology, observed, damped-persistence]
+      --weather <WEATHER>      Future weather (observed looks ahead) [default: climatology] [possible values: climatology, observed, damped-persistence, mstl-arima]
       --keep-gaps              Keep gaps in a location's periods
       --no-pad                 Do not pad locations to the full range
       --keep-untrained         Keep locations with no target before the test windows

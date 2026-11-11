@@ -1,0 +1,1 @@
+import{G as e}from"./extension-BPI8Mi85.js";function t(t){var n=t.getData().tree,r={};n.eachNode(function(n){for(var i=n;i&&i.depth>1;)i=i.parentNode;var a=e(t.ecModel,i.name||i.dataIndex+``,r);n.setVisual(`decal`,a)})}export{t};

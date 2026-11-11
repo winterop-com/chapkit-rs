@@ -344,9 +344,100 @@ pub fn score(forecasts: &[Forecast], data: &DataFrame) -> Result<Scores> {
     })
 }
 
+/// The median and the 10th, 25th, 75th and 90th percentiles of a forecast's samples, by numpy's
+/// default (linear) method, as the metrics compute them. `NaN` samples sort last.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Quantiles {
+    pub median: f64,
+    pub q10: f64,
+    pub q25: f64,
+    pub q75: f64,
+    pub q90: f64,
+}
+
+impl Quantiles {
+    /// The quantiles of `samples` (`NaN` each when there are none).
+    pub fn of(samples: &[f64]) -> Quantiles {
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        Quantiles {
+            median: percentile(&sorted, 50.0),
+            q10: percentile(&sorted, 10.0),
+            q25: percentile(&sorted, 25.0),
+            q75: percentile(&sorted, 75.0),
+            q90: percentile(&sorted, 90.0),
+        }
+    }
+}
+
+/// One forecast of a backtest without its samples: enough to draw it against the truth.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ForecastSummary {
+    /// The split (0 is the first).
+    pub split: usize,
+    pub location: String,
+    pub time_period: String,
+    pub horizon: usize,
+    /// The observed target, `None` when missing.
+    pub observed: Option<f64>,
+    #[serde(flatten)]
+    pub quantiles: Quantiles,
+}
+
+/// Summarize `forecasts` against the observed targets of `data` (the backtest's dataset), in order.
+pub fn summarize(forecasts: &[Forecast], data: &DataFrame) -> Result<Vec<ForecastSummary>> {
+    let observed = observations(data)?;
+    Ok(forecasts
+        .iter()
+        .map(|f| ForecastSummary {
+            split: f.split,
+            location: f.location.clone(),
+            time_period: f.time_period.clone(),
+            horizon: f.horizon,
+            observed: Period::parse(&f.time_period)
+                .and_then(|p| observed.get(&(f.location.clone(), p)))
+                .copied(),
+            quantiles: Quantiles::of(&f.samples),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quantiles_match_numpy_and_summaries_carry_the_truth() {
+        // np.percentile([4, 1, 3, 2], [50, 10, 25, 75, 90]) = [2.5, 1.3, 1.75, 3.25, 3.7]
+        let q = Quantiles::of(&[4.0, 1.0, 3.0, 2.0]);
+        let want = [2.5, 1.3, 1.75, 3.25, 3.7];
+        for (got, want) in [q.median, q.q10, q.q25, q.q75, q.q90].iter().zip(want) {
+            assert!((got - want).abs() < 1e-12);
+        }
+        let data = DataFrame::from_columns(vec![
+            (
+                "time_period",
+                chapkit_core::Column::from_strs(["2024-01", "2024-02"]),
+            ),
+            ("location", chapkit_core::Column::from_strs(["A", "A"])),
+            (
+                "disease_cases",
+                chapkit_core::Column::Float(vec![Some(5.0), None]),
+            ),
+        ])
+        .unwrap();
+        let f = |p: &str| Forecast {
+            split: 1,
+            location: "A".into(),
+            time_period: p.into(),
+            horizon: 1,
+            samples: vec![1.0, 2.0],
+        };
+        let s = summarize(&[f("2024-01"), f("2024-02")], &data).unwrap();
+        assert_eq!(s[0].observed, Some(5.0));
+        assert_eq!(s[1].observed, None);
+        assert_eq!((s[1].split, s[1].quantiles.median), (1, 1.5));
+    }
 
     #[test]
     fn percentile_matches_numpy() {

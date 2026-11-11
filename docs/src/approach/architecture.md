@@ -34,7 +34,7 @@ depend on `chapkit` like any downstream project would.
 7. The handler replies 202 with the job id and artifact id. A fast job is already `completed`.
 
 `$predict` is the same shape; the prediction frame is stored as the child artifact chap-core reads.
-`$predict-sync` and `$explain` skip the job and the artifact entirely.
+`$predict-sync` and `$explain` skip the job and the artifact entirely; so does `$predict-splits` when it is done within the eager budget.
 
 ## The type-erased model
 

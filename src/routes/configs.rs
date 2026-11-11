@@ -60,7 +60,7 @@ async fn create(
     let data = normalized(&s, &body)?;
     let id = match &body.id {
         Some(raw) => parse_ulid(raw)?.to_string(),
-        None => ulid::Ulid::generate().to_string(),
+        None => chapkit_http::ids::new_id().to_string(),
     };
     let now = entity_now();
     let row = ConfigRow {

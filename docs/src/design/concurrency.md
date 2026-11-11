@@ -5,6 +5,7 @@
 | HTTP | tokio's multi-threaded runtime, one worker thread per core; axum serves requests in parallel |
 | jobs (`$train`, `$predict`, `$backtest`, `$hpo`) | queued behind a semaphore, one at a time by default (`CHAPKIT_MAX_CONCURRENCY`), as in chapkit; the model runs on tokio's blocking pool so it never stalls request handling or health checks |
 | `$predict-sync`, `$explain` | no job; bounded by a second semaphore, one per core by default (`CHAPKIT_SYNC_CONCURRENCY`), so a burst cannot start more CPU-bound work than there are cores |
+| `$predict-splits` | bounded by the same semaphore; answered directly when done within the eager budget, else handed to a job that waits for it and stores the artifact |
 | models | `&self` methods on a `Send + Sync` type; trained state is shared behind an `Arc` and read with no lock during a call |
 | explainers | perturbations are evaluated in parallel with rayon, across all cores, unless the batch is cheaper on one thread ([Explainers](explainers.md)) |
 | backtests, searches | inside one job, trainings, splits and search trials run in parallel with rayon, across all cores |

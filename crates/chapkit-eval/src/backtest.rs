@@ -16,6 +16,8 @@ use crate::weather::WeatherProvider;
 /// One forecast cell: a location and period of a split, with its samples.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Forecast {
+    /// The split (0 is the first).
+    pub split: usize,
     /// Location.
     pub location: String,
     /// Forecast period, as written in the data.
@@ -99,6 +101,7 @@ fn flatten(prediction: &DataFrame, split: &Split, index: usize, n: usize) -> Res
             return Err(at(format!("non-finite samples for {location} in {label}")));
         }
         out.push(Forecast {
+            split: index,
             location: location.to_owned(),
             time_period: label.to_owned(),
             horizon,

@@ -1,7 +1,8 @@
-.PHONY: help install release-tag check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi eval-fixtures models-check models-release clean
+.PHONY: help install release-tag check test-turso test-polars build release lint fmt test bench doc docs docs-serve openapi compare-openapi eval-fixtures arima-fixtures models-check models-release ui clean
 
 MODELS ?= ../chapkit-rs-models
 CHAP_CORE ?= ../../chap-core
+ARIMA_IMAGE ?= ghcr.io/chap-models/auto_arima_chapkit@sha256:49f2b0ecce17cdb908606f4797bc93b6ac8b8c19e444a1f768226f764ff3314f
 
 
 help:
@@ -25,8 +26,10 @@ help:
 	@echo "  openapi   Regenerate the committed openapi.json"
 	@echo "  compare-openapi PY=<url> RS=<url>  Diff a Python chapkit service's OpenAPI against a chapkit-rs one"
 	@echo "  eval-fixtures   Regenerate chapkit-eval's parity fixtures from chap-core (CHAP_CORE=$(CHAP_CORE))"
+	@echo "  arima-fixtures  Regenerate chapkit-ts' parity fixtures from R and fable (ARIMA_IMAGE)"
 	@echo "  models-check    Run make check in $(MODELS)"
 	@echo "  models-release  Build the model binaries into $(MODELS)/bin"
+	@echo "  ui        Install and build the web UI into crates/chapkit-ui/dist (needs bun and NPM_TOKEN)"
 	@echo "  clean     Remove build output"
 
 PREFIX ?= $(HOME)/.local
@@ -107,12 +110,21 @@ compare-openapi:
 
 eval-fixtures:
 	@$(CHAP_CORE)/.venv/bin/python scripts/gen_eval_fixtures.py
+	@$(CHAP_CORE)/.venv/bin/python -I scripts/gen_mstl_arima_fixtures.py
+
+arima-fixtures:
+	@Rscript scripts/gen_arima_fixtures.R stats
+	@docker run --rm --platform linux/amd64 -v "$(CURDIR)":/w -w /w $(ARIMA_IMAGE) Rscript scripts/gen_arima_fixtures.R fable
 
 models-check:
 	@$(MAKE) -C $(MODELS) check
 
 models-release:
 	@$(MAKE) -C $(MODELS) release
+
+# The web UI (ui/, on sokkel-ui from GitHub Packages) into the dist/ chapkit-ui embeds.
+ui:
+	@cd ui && bun install --frozen-lockfile && bun run lint && bun run test && bun run build
 
 clean:
 	@cargo clean

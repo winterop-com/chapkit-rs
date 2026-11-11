@@ -2,4 +2,5 @@
 
 pub mod artifacts;
 pub mod configs;
+pub mod datasets;
 pub mod ml;

@@ -181,7 +181,7 @@ impl Scheduler {
 
     /// Submit a job; returns its id immediately.
     pub fn submit(&self, work: JobFuture) -> Ulid {
-        let id = Ulid::generate();
+        let id = crate::ids::new_id();
         let record = JobRecord {
             id,
             status: JobStatus::Pending,

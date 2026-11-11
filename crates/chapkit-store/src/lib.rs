@@ -9,6 +9,7 @@
 //! - artifacts: a tree (`parent_id`, `level`) of JSON `data`, plus an optional binary
 //!   `content` blob (for example a safetensors checkpoint) kept out of the JSON
 //! - links from a config to the root artifacts trained with it
+//! - datasets (a chapkit-rs extension): a summary as JSON `meta`, and the data as a blob
 
 mod sqlite;
 #[cfg(feature = "turso")]
@@ -76,6 +77,17 @@ pub struct NewArtifact {
     pub created_at: String,
 }
 
+/// A stored dataset, without its data ([`Store::dataset_data`]). `meta` is the summary the
+/// service computed when the dataset was uploaded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetRow {
+    pub id: String,
+    pub name: String,
+    pub meta: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Offset/limit for list queries.
 #[derive(Debug, Clone, Copy)]
 pub struct Page {
@@ -111,6 +123,12 @@ pub trait Store: Send + Sync + 'static {
     async fn artifact_content(&self, id: &str) -> StoreResult<Option<Vec<u8>>>;
     /// Artifacts ordered by id, optionally paged, with the total count.
     async fn list_artifacts(&self, page: Option<Page>) -> StoreResult<(Vec<ArtifactRow>, u64)>;
+    /// Artifacts whose `data.type` is `kind`, ordered by id, optionally paged, with their count.
+    async fn list_artifacts_of_type(
+        &self,
+        kind: &str,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ArtifactRow>, u64)>;
     /// Replace data and tags; `None` if missing.
     async fn update_artifact(
         &self,
@@ -132,6 +150,17 @@ pub trait Store: Send + Sync + 'static {
     async fn linked_artifacts(&self, config_id: &str) -> StoreResult<Vec<ArtifactRow>>;
     /// The config linked to the root of an artifact's tree.
     async fn config_for_artifact(&self, artifact_id: &str) -> StoreResult<Option<ConfigRow>>;
+
+    /// Insert a dataset and its data; [`StoreError::Conflict`] if the id exists.
+    async fn insert_dataset(&self, row: DatasetRow, data: Vec<u8>) -> StoreResult<()>;
+    /// One dataset, without its data.
+    async fn get_dataset(&self, id: &str) -> StoreResult<Option<DatasetRow>>;
+    /// A dataset's data.
+    async fn dataset_data(&self, id: &str) -> StoreResult<Option<Vec<u8>>>;
+    /// Datasets ordered by id, optionally paged, with the total count.
+    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)>;
+    /// Delete a dataset. `false` if missing.
+    async fn delete_dataset(&self, id: &str) -> StoreResult<bool>;
 }
 
 /// Open a store from a database URL.

@@ -138,6 +138,42 @@ pub struct PredictRequest {
     pub run_info: Option<RunInfoIn>,
 }
 
+/// One backtest split of `$predict-splits`: its future, and its history given in full or as the
+/// period the shared `historic` is cut at.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SplitIn {
+    /// This split's history; or give `historic_end`.
+    #[schema(value_type = Option<Object>)]
+    pub historic: Option<DataFrame>,
+    /// Last period of the shared `historic` this split sees (inclusive).
+    pub historic_end: Option<String>,
+    #[schema(value_type = Object)]
+    pub future: DataFrame,
+}
+
+/// `POST /api/v1/ml/$predict-splits`: the forecasts of every backtest split of one training.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PredictSplitsRequest {
+    pub artifact_id: String,
+    /// Checked against the training artifact's config when given.
+    pub config_id: Option<String>,
+    /// History shared by the splits that give `historic_end`.
+    #[schema(value_type = Option<Object>)]
+    pub historic: Option<DataFrame>,
+    pub splits: Vec<SplitIn>,
+    #[schema(value_type = Option<Object>)]
+    pub geo: Option<Geo>,
+    pub run_info: Option<RunInfoIn>,
+}
+
+/// `$predict-splits` finished within the eager budget: the forecasts, not stored.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PredictSplitsResponse {
+    /// One prediction frame per split, in order, as `$predict` stores them.
+    #[schema(value_type = Vec<Object>)]
+    pub predictions: Vec<DataFrame>,
+}
+
 /// `POST /api/v1/ml/$explain`: explain one forecast cell of a trained model.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ExplainRequest {
@@ -241,7 +277,7 @@ pub struct BacktestSettings {
     pub stride: Option<usize>,
     /// Trainings (default 1).
     pub retrain: Option<usize>,
-    /// Future weather: `climatology` (default), `damped_persistence` or `observed`.
+    /// Future weather: `climatology` (default), `damped_persistence`, `mstl_arima` or `observed`.
     pub weather: Option<String>,
     /// Fill gaps in a location's periods (default true).
     pub fill_gaps: Option<bool>,
@@ -251,7 +287,7 @@ pub struct BacktestSettings {
     pub drop_untrained: Option<bool>,
 }
 
-/// `POST /api/v1/ml/$backtest`: a backtest of the model on `data`.
+/// `POST /api/v1/ml/$backtest`: a backtest of the model on `data` or a stored dataset.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct BacktestRequest {
     /// A stored config; or give `config`, or neither for the defaults.
@@ -259,11 +295,90 @@ pub struct BacktestRequest {
     /// Model options, as a config's `data`.
     #[schema(value_type = Option<Object>)]
     pub config: Option<Value>,
+    /// A stored dataset; or give `data`.
+    pub dataset_id: Option<String>,
     /// The dataset, chapkit DataFrame JSON.
-    #[schema(value_type = Object)]
-    pub data: DataFrame,
+    #[schema(value_type = Option<Object>)]
+    pub data: Option<DataFrame>,
     #[serde(flatten)]
     pub settings: BacktestSettings,
+}
+
+/// `POST /api/v1/ml/$forecast`: train on the whole dataset and forecast the periods after it.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ForecastRequest {
+    /// A stored config; or give `config`, or neither for the defaults.
+    pub config_id: Option<String>,
+    /// Model options, as a config's `data`.
+    #[schema(value_type = Option<Object>)]
+    pub config: Option<Value>,
+    /// A stored dataset; or give `data`.
+    pub dataset_id: Option<String>,
+    /// The dataset, chapkit DataFrame JSON.
+    #[schema(value_type = Option<Object>)]
+    pub data: Option<DataFrame>,
+    /// Periods to forecast (default: the config's `prediction_periods`, else 3).
+    pub periods: Option<usize>,
+    /// Future weather: `climatology` (default), `damped_persistence` or `mstl_arima`.
+    pub weather: Option<String>,
+}
+
+/// `POST /api/v1/datasets` as JSON.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct DatasetIn {
+    pub name: String,
+    /// The dataset, chapkit DataFrame JSON, with `time_period`, `location` and the target.
+    #[schema(value_type = Object)]
+    pub data: DataFrame,
+    /// The target column (default `disease_cases`).
+    pub target: Option<String>,
+}
+
+/// `POST /api/v1/datasets` as `multipart/form-data`: a CSV or chapkit DataFrame JSON file.
+#[derive(Debug, Clone, ToSchema)]
+#[allow(dead_code)]
+pub struct DatasetUpload {
+    /// CSV, or chapkit DataFrame JSON (a `.json` name or a body starting with `{`).
+    #[schema(value_type = String, format = Binary)]
+    pub file: Vec<u8>,
+    /// Name (default: the file's name).
+    pub name: Option<String>,
+    /// The target column (default `disease_cases`).
+    pub target: Option<String>,
+}
+
+/// What the service computed of a dataset when it was stored.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DatasetMeta {
+    pub target: String,
+    pub rows: usize,
+    /// Distinct locations.
+    pub locations: usize,
+    /// The locations, sorted.
+    pub location_ids: Vec<String>,
+    /// `month` or `week`.
+    pub period_type: String,
+    /// First period, as chapkit writes it (`2024-01`, `2024W01`).
+    pub first_period: String,
+    /// Last period, as chapkit writes it.
+    pub last_period: String,
+    /// Distinct periods.
+    pub periods: usize,
+    /// Every column, in order.
+    pub columns: Vec<String>,
+    /// Numeric columns other than the target, `time_period` and `location`.
+    pub covariates: Vec<String>,
+}
+
+/// A stored dataset.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DatasetOut {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(flatten)]
+    pub meta: DatasetMeta,
 }
 
 /// `POST /api/v1/ml/$hpo`: a hyperparameter search over the model's search space, each trial a

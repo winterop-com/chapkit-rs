@@ -25,17 +25,22 @@ Next:
     its CSV export; the Rust-only `$backtest` job endpoint, storing the result as an `ml_backtest` artifact.
   - Next: target masking on the command line; checkpoint provenance (splits that start before a
     pre-trained model's `trained_until` are flagged); refreshing the fixtures on every chap-core release;
-    the workbench UI below, to show the scores and forecasts. MSTL + ARIMA weather stays out: it is
-    statsforecast's AutoARIMA search, a large port of its own.
-  - Later, with chap-core: a `$predict-splits` endpoint returning every split's forecasts in one call, so
-    chap-core's own backtest makes one round trip per training instead of one per split and still scores
-    the forecasts itself.
+    the workbench UI below, to show the scores and forecasts.
+  - Done since: chap-core's MSTL + ARIMA weather provider, a port of the statsmodels code it runs; and
+    `chapkit::ts` (crate `chapkit-ts`): STL, KPSS, R's `stats::arima` and fable's automatic ARIMA search,
+    with parity against R and fable, for models such as the auto-ARIMA baseline.
+  - Done: `$predict-splits`, every split's forecasts in one call, so chap-core's own backtest can make one
+    round trip per training instead of one per split and still score the forecasts itself
+    ([proposal](../design/predict-splits.md)). Next, with chap-core: using it from chap-core's REST wrapper.
 - **A model workbench UI**: Python chapkit's console (configs, train, predict, jobs, artifacts) plus what
   the backtests make possible: a dataset, a backtest, scores by horizon and location, forecasts against the
   truth, skill against the baselines, explanations and search trials. For one model and its developer; the
   Modeling App remains the tool for comparing models across a country.
   Built with [sokkel-ui](https://github.com/winterop-com/sokkel-ui) (React components on Base UI, with charts
   and maps), served by the model binary; a component it lacks is added to sokkel-ui, not built in the app.
+  In progress ([guide](../guide/ui.md)): the backend is done (stored datasets, `$backtest` on a stored
+  dataset with every forecast's quantiles against the truth, `$forecast` past the end of the data, artifacts
+  by type, the UI embedded and served at `/ui/`); the frontend is being built.
 
 - **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
   the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by

@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use chapkit_core::{DataFrame, Period, PredictInput, RunInfo, TrainInput, cols};
-use chapkit_eval::{Metric, Options, Scores, weather_provider};
+use chapkit_eval::{
+    ForecastSummary, Metric, Options, Prepare, Quantiles, Scores, weather_provider,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -109,6 +111,11 @@ pub struct Report {
     pub aggregate: Metrics,
     pub by_horizon: Vec<HorizonScores>,
     pub by_location: Vec<LocationScores>,
+    /// The stored dataset backtested (`$backtest` with `dataset_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataset_id: Option<String>,
+    /// Every forecast with the observed target and the quantiles of its samples, split by split.
+    pub forecasts: Vec<ForecastSummary>,
     #[serde(skip)]
     pub scores: Scores,
 }
@@ -153,7 +160,7 @@ pub(crate) fn describe(data: &DataFrame, source: String) -> Result<DataReport, S
 }
 
 /// The run settings of a backtest with `config`.
-fn run_info(config: &Value, periods: usize) -> RunInfo {
+pub(crate) fn run_info(config: &Value, periods: usize) -> RunInfo {
     RunInfo {
         prediction_periods: u32::try_from(periods).unwrap_or(u32::MAX),
         additional_continuous_covariates: config
@@ -197,6 +204,8 @@ pub(crate) fn evaluate(
     )
     .map_err(|e| e.to_string())?;
     let scores = backtest.score(data).map_err(|e| e.to_string())?;
+    let forecasts =
+        chapkit_eval::summarize(&backtest.forecasts, data).map_err(|e| e.to_string())?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(Report {
         model: id.to_owned(),
@@ -237,8 +246,82 @@ pub(crate) fn evaluate(
                 metrics: metrics(v),
             })
             .collect(),
+        dataset_id: None,
+        forecasts,
         scores,
     })
+}
+
+/// One location and period of a forecast ahead: the quantiles of its samples.
+#[derive(Debug, Clone, Serialize)]
+pub struct AheadSummary {
+    pub location: String,
+    pub time_period: String,
+    #[serde(flatten)]
+    pub quantiles: Quantiles,
+}
+
+/// A forecast past the end of a dataset.
+#[derive(Debug, Clone)]
+pub(crate) struct Ahead {
+    pub forecasts: Vec<AheadSummary>,
+    /// The model's prediction frame.
+    pub frame: DataFrame,
+}
+
+/// chap-core's `forecast_ahead`: train `model` with `config` (from [`backtest_config`]) on the
+/// whole of `data` (prepared as for a backtest) and forecast the `periods` periods after it, with
+/// the future covariates from `weather`.
+pub(crate) fn forecast(
+    model: &dyn DynModel,
+    config: &Value,
+    data: &DataFrame,
+    periods: usize,
+    weather: &str,
+) -> Result<Ahead, String> {
+    let provider =
+        weather_provider(weather).ok_or_else(|| format!("unknown weather provider {weather}"))?;
+    let ahead = chapkit_eval::forecast_ahead(data, periods, &Prepare::default(), provider.as_ref())
+        .map_err(|e| e.to_string())?;
+    let run = run_info(config, periods);
+    let (trained, _) = model
+        .train(config, TrainInput::new(&ahead.historic, &run, None))
+        .map_err(|e| e.to_string())?;
+    let frame = model
+        .predict(
+            &trained,
+            config,
+            PredictInput::new(&ahead.historic, &ahead.future, &run, None),
+        )
+        .map_err(|e| e.to_string())?;
+    let (tp, loc) = (
+        frame
+            .require(cols::TIME_PERIOD)
+            .map_err(|e| e.to_string())?,
+        frame.require(cols::LOCATION).map_err(|e| e.to_string())?,
+    );
+    let samples: Vec<Vec<f64>> = frame
+        .iter()
+        .filter(|(name, _)| name.starts_with("sample_"))
+        .map(|(name, col)| {
+            col.to_f64_vec()
+                .ok_or_else(|| format!("{name} is not numeric"))
+        })
+        .collect::<Result<_, _>>()?;
+    if samples.is_empty() {
+        return Err("the forecast has no sample columns".into());
+    }
+    let forecasts = (0..frame.n_rows())
+        .map(|row| {
+            let values: Vec<f64> = samples.iter().filter_map(|c| c.get(row).copied()).collect();
+            AheadSummary {
+                location: loc.str_at(row).unwrap_or_default().to_owned(),
+                time_period: tp.str_at(row).unwrap_or_default().to_owned(),
+                quantiles: Quantiles::of(&values),
+            }
+        })
+        .collect();
+    Ok(Ahead { forecasts, frame })
 }
 
 /// A finished hyperparameter search, as `<bin> hpo --json` prints it and `$hpo` stores it.

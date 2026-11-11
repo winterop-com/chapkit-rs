@@ -5,17 +5,18 @@
 //! numeric covariates; `population` and non-numeric columns are carried forward from each
 //! location's last observation. A provider that leaks ([`Observed`]) is given the window's own
 //! observations instead. [`DampedPersistence`] adds the last anomaly from the climatology, damped
-//! with the horizon.
-//!
-//! Not ported: chap-core's MSTL + ARIMA provider. It forecasts each series with statsforecast's
-//! AutoARIMA, a stepwise search over ARIMA orders with its own fitting and selection rules; a
-//! port with parity is a large piece of work of its own.
+//! with the horizon. [`MstlArima`] forecasts each series from its MSTL decomposition and an
+//! ARIMA chosen by AICc, as chap-core does with statsmodels.
 
 use std::collections::HashMap;
 
 use chapkit_core::{Column, DataFrame, Error, Period, Result, cols};
 
 use crate::mask::MASK_INDICATOR;
+
+mod mstl_arima;
+
+pub use mstl_arima::MstlArima;
 
 /// Numeric covariates without a seasonal signal, carried forward instead of forecast.
 const NON_SEASONAL: [&str; 1] = ["population"];
@@ -40,7 +41,7 @@ pub struct WeatherInput<'a> {
 
 /// A source of future covariates.
 pub trait WeatherProvider: Send + Sync {
-    /// chap-core's provider id (`climatology`, `damped_persistence`, `observed`).
+    /// chap-core's provider id (`climatology`, `damped_persistence`, `mstl_arima`, `observed`).
     fn id(&self) -> &'static str;
 
     /// True when the provider reads the window's own observations (look-ahead). Only then is it
@@ -55,12 +56,13 @@ pub trait WeatherProvider: Send + Sync {
     fn future_weather(&self, input: &WeatherInput<'_>) -> Result<Vec<Column>>;
 }
 
-/// The provider with chap-core's id, if ported.
+/// The provider with chap-core's id.
 pub fn weather_provider(id: &str) -> Option<Box<dyn WeatherProvider>> {
     match id {
         "climatology" => Some(Box::new(Climatology)),
         "observed" => Some(Box::new(Observed)),
         "damped_persistence" => Some(Box::new(DampedPersistence::default())),
+        "mstl_arima" => Some(Box::new(MstlArima::default())),
         _ => None,
     }
 }

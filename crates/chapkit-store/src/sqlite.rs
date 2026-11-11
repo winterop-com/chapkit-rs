@@ -5,7 +5,10 @@ use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-use crate::{ArtifactRow, ConfigRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError, StoreResult};
+use crate::{
+    ArtifactRow, ConfigRow, DatasetRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
+    StoreResult,
+};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS configs (
@@ -34,8 +37,18 @@ CREATE TABLE IF NOT EXISTS config_artifacts (
     artifact_id TEXT NOT NULL UNIQUE REFERENCES artifacts(id) ON DELETE CASCADE,
     PRIMARY KEY (config_id, artifact_id)
 );
+CREATE TABLE IF NOT EXISTS datasets (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    meta       TEXT NOT NULL,
+    data       BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 PRAGMA user_version = 1;
 ";
+
+const DATASET_COLS: &str = "id, name, meta, created_at, updated_at";
 
 const ARTIFACT_COLS: &str = "id, parent_id, level, data, tags, created_at, updated_at";
 
@@ -81,6 +94,22 @@ fn parse_config(t: (String, String, String, String, String, String)) -> StoreRes
         tags: serde_json::from_str(&t.3).map_err(|e| json_err(&e))?,
         created_at: t.4,
         updated_at: t.5,
+    })
+}
+
+type RawDataset = (String, String, String, String, String);
+
+fn dataset_row(r: &Row<'_>) -> rusqlite::Result<RawDataset> {
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+}
+
+fn parse_dataset(t: RawDataset) -> StoreResult<DatasetRow> {
+    Ok(DatasetRow {
+        id: t.0,
+        name: t.1,
+        meta: serde_json::from_str(&t.2).map_err(|e| json_err(&e))?,
+        created_at: t.3,
+        updated_at: t.4,
     })
 }
 
@@ -331,6 +360,35 @@ impl Store for SqliteStore {
         .await
     }
 
+    async fn list_artifacts_of_type(
+        &self,
+        kind: &str,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
+        let kind = kind.to_owned();
+        self.with(move |c| {
+            const WHERE: &str = "WHERE json_extract(data, '$.type') = ?1";
+            let total: i64 = c
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM artifacts {WHERE}"),
+                    [&kind],
+                    |r| r.get(0),
+                )
+                .map_err(|e| db(&e))?;
+            let sql = format!(
+                "SELECT {ARTIFACT_COLS} FROM artifacts {WHERE} ORDER BY id{}",
+                page_sql(page)
+            );
+            let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
+            let rows = stmt.query_map([&kind], artifact_row).map_err(|e| db(&e))?;
+            let rows = rows
+                .map(|r| r.map_err(|e| db(&e)).and_then(parse_artifact))
+                .collect::<StoreResult<Vec<_>>>()?;
+            Ok((rows, total.max(0) as u64))
+        })
+        .await
+    }
+
     async fn update_artifact(
         &self,
         id: &str,
@@ -455,6 +513,76 @@ impl Store for SqliteStore {
                 Some(cid) => get_config_sync(c, &cid),
                 None => Ok(None),
             }
+        })
+        .await
+    }
+
+    async fn insert_dataset(&self, row: DatasetRow, data: Vec<u8>) -> StoreResult<()> {
+        self.with(move |c| {
+            let meta = to_text(&row.meta)?;
+            c.execute(
+                "INSERT INTO datasets (id, name, meta, data, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![row.id, row.name, meta, data, row.created_at, row.updated_at],
+            )
+            .map_err(|e| if is_unique(&e) { StoreError::Conflict(format!("Dataset with id {} already exists", row.id)) } else { db(&e) })?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn get_dataset(&self, id: &str) -> StoreResult<Option<DatasetRow>> {
+        let id = id.to_owned();
+        self.with(move |c| {
+            c.query_row(
+                &format!("SELECT {DATASET_COLS} FROM datasets WHERE id = ?1"),
+                [&id],
+                dataset_row,
+            )
+            .optional()
+            .map_err(|e| db(&e))?
+            .map(parse_dataset)
+            .transpose()
+        })
+        .await
+    }
+
+    async fn dataset_data(&self, id: &str) -> StoreResult<Option<Vec<u8>>> {
+        let id = id.to_owned();
+        self.with(move |c| {
+            c.query_row("SELECT data FROM datasets WHERE id = ?1", [&id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(|e| db(&e))
+        })
+        .await
+    }
+
+    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)> {
+        self.with(move |c| {
+            let total: i64 = c
+                .query_row("SELECT COUNT(*) FROM datasets", [], |r| r.get(0))
+                .map_err(|e| db(&e))?;
+            let sql = format!(
+                "SELECT {DATASET_COLS} FROM datasets ORDER BY id{}",
+                page_sql(page)
+            );
+            let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
+            let rows = stmt.query_map([], dataset_row).map_err(|e| db(&e))?;
+            let rows = rows
+                .map(|r| r.map_err(|e| db(&e)).and_then(parse_dataset))
+                .collect::<StoreResult<Vec<_>>>()?;
+            Ok((rows, total.max(0) as u64))
+        })
+        .await
+    }
+
+    async fn delete_dataset(&self, id: &str) -> StoreResult<bool> {
+        let id = id.to_owned();
+        self.with(move |c| {
+            Ok(c.execute("DELETE FROM datasets WHERE id = ?1", [&id])
+                .map_err(|e| db(&e))?
+                > 0)
         })
         .await
     }

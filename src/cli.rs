@@ -83,6 +83,9 @@ pub enum Weather {
     // Climatology plus the last anomaly, damped with the horizon.
     #[value(alias = "damped_persistence")]
     DampedPersistence,
+    // MSTL plus an ARIMA chosen by AICc (chap-core's mstl_arima).
+    #[value(alias = "mstl_arima")]
+    MstlArima,
 }
 
 impl Weather {
@@ -92,6 +95,7 @@ impl Weather {
             Weather::Climatology => "climatology",
             Weather::Observed => "observed",
             Weather::DampedPersistence => "damped_persistence",
+            Weather::MstlArima => "mstl_arima",
         }
     }
 }
@@ -380,12 +384,17 @@ mod tests {
             ("observed", 2)
         );
         assert!(parse(&["bin", "eval", "--weather", "mstl"]).is_err());
-        for name in ["damped-persistence", "damped_persistence"] {
+        for (name, id) in [
+            ("damped-persistence", "damped_persistence"),
+            ("damped_persistence", "damped_persistence"),
+            ("mstl-arima", "mstl_arima"),
+            ("mstl_arima", "mstl_arima"),
+        ] {
             let Command::Eval(e) = parse(&["bin", "eval", "--weather", name]).unwrap().command
             else {
                 panic!("expected eval")
             };
-            assert_eq!(e.backtest.weather.id(), "damped_persistence");
+            assert_eq!(e.backtest.weather.id(), id);
         }
         let Command::Eval(e) = parse(&["bin", "eval", "--keep-gaps", "--no-pad"])
             .unwrap()

@@ -69,12 +69,21 @@ fn close(got: f64, want: f64, tol: f64) -> bool {
 }
 
 /// Each split's windows exactly, and its future covariates to 1e-9 (the climatology's means are
-/// summed in a different order than numpy's).
+/// summed in a different order than numpy's), MSTL + ARIMA's to 1e-3: the same orders, but some
+/// of statsmodels' fits stop at `maxiter = 50` before converging, and where they stop follows
+/// rounding (measured 3.8e-4).
 #[test]
 fn splits_match_chap_core() {
+    let mut worst = 0.0f64;
     for name in CASES {
         let c = case(name);
-        for provider in ["climatology", "damped_persistence", "observed"] {
+        for provider in [
+            "climatology",
+            "damped_persistence",
+            "observed",
+            "mstl_arima",
+        ] {
+            let tol = if provider == "mstl_arima" { 1e-3 } else { 1e-9 };
             let want = &c.fixture["splits"][provider];
             let weather = weather_provider(provider).unwrap();
             let got = train_test_splits(&c.data, &c.options, weather.as_ref()).unwrap();
@@ -133,7 +142,12 @@ fn splits_match_chap_core() {
                         row.iter().zip(w.as_array().unwrap()).enumerate().skip(2)
                     {
                         let ok = match (got.as_f64(), want.as_f64()) {
-                            (Some(a), Some(b)) => close(a, b, 1e-9),
+                            (Some(a), Some(b)) => {
+                                if provider == "mstl_arima" {
+                                    worst = worst.max((a - b).abs() / b.abs().max(1.0));
+                                }
+                                close(a, b, tol)
+                            }
                             _ => got == want,
                         };
                         assert!(ok, "{ctx} {key:?} {}: {got} vs {want}", names[i]);
@@ -142,6 +156,7 @@ fn splits_match_chap_core() {
             }
         }
     }
+    eprintln!("mstl_arima: worst relative difference {worst:.1e}");
 }
 
 fn forecasts(v: &Value) -> Vec<Forecast> {
@@ -149,6 +164,7 @@ fn forecasts(v: &Value) -> Vec<Forecast> {
         .unwrap()
         .iter()
         .map(|f| Forecast {
+            split: 0,
             location: f["location"].as_str().unwrap().to_owned(),
             time_period: f["time_period"].as_str().unwrap().to_owned(),
             horizon: usize::try_from(f["horizon"].as_u64().unwrap()).unwrap(),

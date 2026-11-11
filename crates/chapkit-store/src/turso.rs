@@ -13,7 +13,10 @@ use serde_json::Value as Json;
 use tokio::sync::Mutex;
 use turso::{Builder, Connection, Value};
 
-use crate::{ArtifactRow, ConfigRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError, StoreResult};
+use crate::{
+    ArtifactRow, ConfigRow, DatasetRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
+    StoreResult,
+};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS configs (
@@ -40,10 +43,19 @@ CREATE TABLE IF NOT EXISTS config_artifacts (
     artifact_id TEXT NOT NULL PRIMARY KEY
 );
 CREATE INDEX IF NOT EXISTS config_artifacts_config ON config_artifacts(config_id);
+CREATE TABLE IF NOT EXISTS datasets (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    meta       TEXT NOT NULL,
+    data       BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 ";
 
 const ARTIFACT_COLS: &str = "id, parent_id, level, data, tags, created_at, updated_at";
 const CONFIG_COLS: &str = "id, name, data, tags, created_at, updated_at";
+const DATASET_COLS: &str = "id, name, meta, created_at, updated_at";
 
 /// turso store. One connection behind an async mutex, so multi-statement
 /// operations are atomic with respect to other requests.
@@ -143,6 +155,35 @@ fn artifact_from(mut r: Vec<Value>) -> StoreResult<ArtifactRow> {
         created_at: as_str(next())?,
         updated_at: as_str(next())?,
     })
+}
+
+fn dataset_from(mut r: Vec<Value>) -> StoreResult<DatasetRow> {
+    if r.len() < 5 {
+        return Err(StoreError::Database("short dataset row".into()));
+    }
+    let mut it = r.drain(..);
+    let mut next = || it.next().unwrap_or(Value::Null);
+    Ok(DatasetRow {
+        id: as_str(next())?,
+        name: as_str(next())?,
+        meta: as_json(next())?,
+        created_at: as_str(next())?,
+        updated_at: as_str(next())?,
+    })
+}
+
+async fn count(c: &Connection, sql: &str, params: Vec<Value>) -> StoreResult<u64> {
+    Ok(
+        match rows(c, sql, params)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|r| r.into_iter().next())
+        {
+            Some(Value::Integer(n)) => n.max(0) as u64,
+            _ => 0,
+        },
+    )
 }
 
 async fn get_config(c: &Connection, id: &str) -> StoreResult<Option<ConfigRow>> {
@@ -436,6 +477,31 @@ impl Store for TursoStore {
         Ok((list, total))
     }
 
+    async fn list_artifacts_of_type(
+        &self,
+        kind: &str,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
+        const WHERE: &str = "WHERE json_extract(data, '$.type') = ?1";
+        let c = self.conn.lock().await;
+        let total = count(
+            &c,
+            &format!("SELECT COUNT(*) FROM artifacts {WHERE}"),
+            vec![s(kind)],
+        )
+        .await?;
+        let sql = format!(
+            "SELECT {ARTIFACT_COLS} FROM artifacts {WHERE} ORDER BY id{}",
+            page_sql(page)
+        );
+        let list = rows(&c, &sql, vec![s(kind)])
+            .await?
+            .into_iter()
+            .map(artifact_from)
+            .collect::<StoreResult<_>>()?;
+        Ok((list, total))
+    }
+
     async fn update_artifact(
         &self,
         id: &str,
@@ -557,5 +623,78 @@ impl Store for TursoStore {
             };
         }
         Ok(None)
+    }
+
+    async fn insert_dataset(&self, row: DatasetRow, data: Vec<u8>) -> StoreResult<()> {
+        let c = self.conn.lock().await;
+        if count(
+            &c,
+            "SELECT COUNT(*) FROM datasets WHERE id = ?1",
+            vec![s(&row.id)],
+        )
+        .await?
+            > 0
+        {
+            return Err(StoreError::Conflict(format!(
+                "Dataset with id {} already exists",
+                row.id
+            )));
+        }
+        exec(
+            &c,
+            "INSERT INTO datasets (id, name, meta, data, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            vec![s(&row.id), s(&row.name), text(&row.meta)?, Value::Blob(data), s(&row.created_at), s(&row.updated_at)],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn get_dataset(&self, id: &str) -> StoreResult<Option<DatasetRow>> {
+        let c = self.conn.lock().await;
+        rows(
+            &c,
+            &format!("SELECT {DATASET_COLS} FROM datasets WHERE id = ?1"),
+            vec![s(id)],
+        )
+        .await?
+        .into_iter()
+        .next()
+        .map(dataset_from)
+        .transpose()
+    }
+
+    async fn dataset_data(&self, id: &str) -> StoreResult<Option<Vec<u8>>> {
+        let c = self.conn.lock().await;
+        Ok(
+            match rows(&c, "SELECT data FROM datasets WHERE id = ?1", vec![s(id)])
+                .await?
+                .into_iter()
+                .next()
+                .and_then(|r| r.into_iter().next())
+            {
+                Some(Value::Blob(b)) => Some(b),
+                _ => None,
+            },
+        )
+    }
+
+    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)> {
+        let c = self.conn.lock().await;
+        let total = count(&c, "SELECT COUNT(*) FROM datasets", vec![]).await?;
+        let sql = format!(
+            "SELECT {DATASET_COLS} FROM datasets ORDER BY id{}",
+            page_sql(page)
+        );
+        let list = rows(&c, &sql, vec![])
+            .await?
+            .into_iter()
+            .map(dataset_from)
+            .collect::<StoreResult<_>>()?;
+        Ok((list, total))
+    }
+
+    async fn delete_dataset(&self, id: &str) -> StoreResult<bool> {
+        let c = self.conn.lock().await;
+        Ok(exec(&c, "DELETE FROM datasets WHERE id = ?1", vec![s(id)]).await? > 0)
     }
 }

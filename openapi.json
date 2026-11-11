@@ -10,7 +10,7 @@
         "tags": [
           "Artifacts"
         ],
-        "summary": "List artifact summaries (`data` without `content`).",
+        "summary": "List artifact summaries (`data` without `content`), optionally of one `type`.",
         "operationId": "list",
         "parameters": [
           {
@@ -37,6 +37,18 @@
                 "null"
               ],
               "format": "int64"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Only artifacts whose `data.type` is this (`ml_training`, `ml_prediction`, `ml_backtest`,\n`ml_forecast`, ...). chapkit-rs extension.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -854,6 +866,252 @@
         }
       }
     },
+    "/api/v1/datasets": {
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "List datasets (paged when both `page` and `size` are given).",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number, starting at 1.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "description": "Page size, 1-100.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOrPage_DatasetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Store a dataset: JSON `{name, data, target?}`, or a CSV or JSON `file` (with `name` and\n`target`) as `multipart/form-data`. It is checked (periods in any form chap-core reads, a\nlocation on every row, a numeric target) and stored as given.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetIn"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/datasets/{id}": {
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Get a dataset's description.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Delete a dataset.",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/datasets/{id}/$data": {
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "The dataset as stored, chapkit DataFrame JSON; with `location` (repeatable), only those\nlocations' rows.",
+        "operationId": "data",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "description": "Only these locations (repeatable)",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/info": {
       "get": {
         "tags": [
@@ -1069,7 +1327,7 @@
         "tags": [
           "ML"
         ],
-        "summary": "Backtest the model on a dataset in-process, scored as chap-core scores it. Returns 202; the\nresult (as `<bin> eval --json` prints it) is stored as an `ml_backtest` artifact.\nchapkit-rs extension; not part of Python chapkit.",
+        "summary": "Backtest the model on a dataset (`data`, or a stored `dataset_id`) in-process, scored as\nchap-core scores it. Returns 202; the result (as `<bin> eval --json` prints it, with every\nforecast's quantiles against the truth) is stored as an `ml_backtest` artifact.\nchapkit-rs extension; not part of Python chapkit.",
         "operationId": "backtest",
         "requestBody": {
           "content": {
@@ -1135,6 +1393,54 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ExplainResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ml/$forecast": {
+      "post": {
+        "tags": [
+          "ML"
+        ],
+        "summary": "Forecast past the end of a dataset (`data`, or a stored `dataset_id`), as chap-core's\n`forecast_ahead`: train on all of it, give the model the next `periods` periods' covariates\nfrom the weather provider, and predict. Returns 202; the forecast (each location and period's\nquantiles, and the prediction frame) is stored as an `ml_forecast` artifact.\nchapkit-rs extension; not part of Python chapkit.",
+        "operationId": "forecast",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForecastRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSubmitted"
                 }
               }
             }
@@ -1385,6 +1691,63 @@
             }
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ml/$predict-splits": {
+      "post": {
+        "tags": [
+          "ML"
+        ],
+        "summary": "Forecast every backtest split of one training in one call: each split's frame equals what\n`$predict` stores for that split alone. Splits give `historic`, or `historic_end` to cut the\nshared `historic`. Answers 200 with the frames when they are ready within the eager budget\n(nothing stored, like `$predict-sync`), else 202 with a job whose `ml_prediction_splits`\nartifact holds the list, like `$predict`.\nchapkit-rs extension; not part of Python chapkit.",
+        "operationId": "predict_splits",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictSplitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictSplitsResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSubmitted"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -1784,9 +2147,6 @@
           },
           {
             "type": "object",
-            "required": [
-              "data"
-            ],
             "properties": {
               "config": {
                 "type": [
@@ -1803,13 +2163,23 @@
                 "description": "A stored config; or give `config`, or neither for the defaults."
               },
               "data": {
-                "type": "object",
+                "type": [
+                  "object",
+                  "null"
+                ],
                 "description": "The dataset, chapkit DataFrame JSON."
+              },
+              "dataset_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A stored dataset; or give `data`."
               }
             }
           }
         ],
-        "description": "`POST /api/v1/ml/$backtest`: a backtest of the model on `data`."
+        "description": "`POST /api/v1/ml/$backtest`: a backtest of the model on `data` or a stored dataset."
       },
       "BacktestSettings": {
         "type": "object",
@@ -1873,7 +2243,7 @@
               "string",
               "null"
             ],
-            "description": "Future weather: `climatology` (default), `damped_persistence` or `observed`."
+            "description": "Future weather: `climatology` (default), `damped_persistence`, `mstl_arima` or `observed`."
           }
         }
       },
@@ -1961,6 +2331,157 @@
           },
           "updated_at": {
             "type": "string"
+          }
+        }
+      },
+      "DatasetIn": {
+        "type": "object",
+        "description": "`POST /api/v1/datasets` as JSON.",
+        "required": [
+          "name",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "The dataset, chapkit DataFrame JSON, with `time_period`, `location` and the target."
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target column (default `disease_cases`)."
+          }
+        }
+      },
+      "DatasetMeta": {
+        "type": "object",
+        "description": "What the service computed of a dataset when it was stored.",
+        "required": [
+          "target",
+          "rows",
+          "locations",
+          "location_ids",
+          "period_type",
+          "first_period",
+          "last_period",
+          "periods",
+          "columns",
+          "covariates"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every column, in order."
+          },
+          "covariates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Numeric columns other than the target, `time_period` and `location`."
+          },
+          "first_period": {
+            "type": "string",
+            "description": "First period, as chapkit writes it (`2024-01`, `2024W01`)."
+          },
+          "last_period": {
+            "type": "string",
+            "description": "Last period, as chapkit writes it."
+          },
+          "location_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The locations, sorted."
+          },
+          "locations": {
+            "type": "integer",
+            "description": "Distinct locations.",
+            "minimum": 0
+          },
+          "period_type": {
+            "type": "string",
+            "description": "`month` or `week`."
+          },
+          "periods": {
+            "type": "integer",
+            "description": "Distinct periods.",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "DatasetOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DatasetMeta"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A stored dataset."
+      },
+      "DatasetUpload": {
+        "type": "object",
+        "description": "`POST /api/v1/datasets` as `multipart/form-data`: a CSV or chapkit DataFrame JSON file.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "CSV, or chapkit DataFrame JSON (a `.json` name or a body starting with `{`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name (default: the file's name)."
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target column (default `disease_cases`)."
           }
         }
       },
@@ -2110,6 +2631,55 @@
           }
         ],
         "description": "`$explain` result."
+      },
+      "ForecastRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/ml/$forecast`: train on the whole dataset and forecast the periods after it.",
+        "properties": {
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Model options, as a config's `data`."
+          },
+          "config_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stored config; or give `config`, or neither for the defaults."
+          },
+          "data": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The dataset, chapkit DataFrame JSON."
+          },
+          "dataset_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stored dataset; or give `data`."
+          },
+          "periods": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Periods to forecast (default: the config's `prediction_periods`, else 3).",
+            "minimum": 0
+          },
+          "weather": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Future weather: `climatology` (default), `damped_persistence` or `mstl_arima`."
+          }
+        }
       },
       "HealthState": {
         "type": "string",
@@ -2432,6 +3002,50 @@
         ],
         "description": "A list response: a plain array, or a [`Paginated`] page when both `page` and `size`\nare given. Used for OpenAPI documentation of list endpoints."
       },
+      "ListOrPage_DatasetOut": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/DatasetMeta"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ],
+              "description": "A stored dataset."
+            },
+            "description": "No pagination requested."
+          },
+          {
+            "$ref": "#/components/schemas/Paginated_DatasetOut",
+            "description": "A page."
+          }
+        ],
+        "description": "A list response: a plain array, or a [`Paginated`] page when both `page` and `size`\nare given. Used for OpenAPI documentation of list endpoints."
+      },
       "Paginated_ArtifactOut": {
         "type": "object",
         "description": "A page of results.",
@@ -2591,6 +3205,78 @@
           }
         }
       },
+      "Paginated_DatasetOut": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "pages"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/DatasetMeta"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "created_at",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ],
+              "description": "A stored dataset."
+            },
+            "description": "Items on this page."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This page number.",
+            "minimum": 0
+          },
+          "pages": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of pages (0 when there are no items).",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Page size.",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total item count.",
+            "minimum": 0
+          }
+        }
+      },
       "PredictRequest": {
         "type": "object",
         "description": "`POST /api/v1/ml/$predict` and `$predict-sync`.",
@@ -2624,6 +3310,71 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "PredictSplitsRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/ml/$predict-splits`: the forecasts of every backtest split of one training.",
+        "required": [
+          "artifact_id",
+          "splits"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "config_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Checked against the training artifact's config when given."
+          },
+          "geo": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "historic": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "History shared by the splits that give `historic_end`."
+          },
+          "run_info": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunInfoIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SplitIn"
+            }
+          }
+        }
+      },
+      "PredictSplitsResponse": {
+        "type": "object",
+        "description": "`$predict-splits` finished within the eager budget: the forecasts, not stored.",
+        "required": [
+          "predictions"
+        ],
+        "properties": {
+          "predictions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "One prediction frame per split, in order, as `$predict` stores them."
           }
         }
       },
@@ -2701,6 +3452,32 @@
             "format": "int32",
             "description": "Forecast horizon (`prediction_length` is accepted too).",
             "minimum": 0
+          }
+        }
+      },
+      "SplitIn": {
+        "type": "object",
+        "description": "One backtest split of `$predict-splits`: its future, and its history given in full or as the\nperiod the shared `historic` is cut at.",
+        "required": [
+          "future"
+        ],
+        "properties": {
+          "future": {
+            "type": "object"
+          },
+          "historic": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "This split's history; or give `historic_end`."
+          },
+          "historic_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last period of the shared `historic` this split sees (inclusive)."
           }
         }
       },

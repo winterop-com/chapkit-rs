@@ -84,7 +84,8 @@ pub async fn require_api_key(
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_owned();
-    if cfg.open_paths.contains(&path) {
+    // The web UI's files are open like the docs; its API calls are not.
+    if cfg.open_paths.contains(&path) || path == "/ui" || path.starts_with("/ui/") {
         return next.run(req).await;
     }
     match req

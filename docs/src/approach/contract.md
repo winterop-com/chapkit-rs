@@ -32,7 +32,7 @@ config links, `$validate`, `$stats`, `$schema`, pagination, SSE `$stream` endpoi
 - **Artifacts.** A training artifact holds a safetensors checkpoint instead of a zipped Python workspace.
   chap-core never reads training artifacts.
 - **Storage.** Configs and artifacts are stored as JSON and blobs in SQLite, not pickled.
-- **Extensions.** `$predict-sync`, `$explain`, `$backtest` and `$hpo` exist only in chapkit-rs;
+- **Extensions.** `$predict-sync`, `$predict-splits`, `$explain`, `$backtest` and `$hpo` exist only in chapkit-rs;
   `/api/v1/info` lists them under `extensions`. Python clients ignore them.
 
 ## The version string

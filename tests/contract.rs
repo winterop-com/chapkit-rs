@@ -30,6 +30,9 @@ struct MeanModel;
 struct MeanConfig {
     #[serde(default = "one")]
     scale: f64,
+    /// Add the location's last historic value, so forecasts depend on the history.
+    #[serde(default)]
+    add_last: bool,
 }
 
 fn one() -> f64 {
@@ -78,13 +81,18 @@ impl Model for MeanModel {
         input: PredictInput<'_>,
     ) -> ModelResult<DataFrame> {
         let loc = input.future.require(cols::LOCATION)?;
+        let mut last = HashMap::new();
+        if cfg.add_last {
+            let hl = input.historic.require(cols::LOCATION)?;
+            let y = input.historic.f64_column(cols::DISEASE_CASES)?;
+            for (i, v) in y.iter().enumerate() {
+                last.insert(hl.str_at(i).unwrap_or_default().to_owned(), *v);
+            }
+        }
         prediction_frame(input.future, 10, |row, out| {
-            let m = loc
-                .str_at(row)
-                .and_then(|l| t.get(l))
-                .copied()
-                .unwrap_or(0.0);
-            out.fill(m * cfg.scale);
+            let l = loc.str_at(row).unwrap_or_default();
+            let m = t.get(l).copied().unwrap_or(0.0);
+            out.fill(m * cfg.scale + last.get(l).copied().unwrap_or(0.0));
             Ok(())
         })
     }
@@ -1118,7 +1126,7 @@ async fn backtest_job_stores_the_eval_result() {
             StatusCode::NOT_FOUND,
         ),
         (
-            json!({"data": data, "weather": "mstl_arima"}),
+            json!({"data": data, "weather": "no-such-provider"}),
             StatusCode::BAD_REQUEST,
         ),
         (json!({"data": data, "retrain": 9}), StatusCode::BAD_REQUEST),
@@ -1269,9 +1277,773 @@ async fn hpo_job_stores_the_search_and_can_create_the_best_config() {
         json!({"data": data, "metric": "nope"}),
         json!({"data": data, "method": "tpe"}),
         json!({"data": data, "trials": 0}),
-        json!({"data": data, "weather": "mstl_arima"}),
+        json!({"data": data, "weather": "no-such-provider"}),
     ] {
         let (s, p, _) = call(&app, "POST", "/api/v1/ml/$hpo", Some(body)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
     }
+}
+
+/// `$predict-splits` frames for backtest_data: each split's history ends at `end`, its future is
+/// the next two months without the target.
+fn splits_input(ends: &[&str]) -> (Value, Vec<(Value, Value)>) {
+    let data = backtest_data();
+    let rows = data["data"].as_array().unwrap();
+    let columns = data["columns"].clone();
+    let mut splits = vec![];
+    for end in ends {
+        let historic: Vec<Value> = rows
+            .iter()
+            .filter(|r| r[0].as_str().unwrap() <= *end)
+            .cloned()
+            .collect();
+        let periods: Vec<&str> = {
+            let mut p: Vec<&str> = rows
+                .iter()
+                .map(|r| r[0].as_str().unwrap())
+                .filter(|p| p > end)
+                .collect();
+            p.sort_unstable();
+            p.dedup();
+            p.into_iter().take(2).collect()
+        };
+        let future: Vec<Value> = rows
+            .iter()
+            .filter(|r| periods.contains(&r[0].as_str().unwrap()))
+            .map(|r| json!([r[0], r[1], r[3]]))
+            .collect();
+        splits.push((
+            json!({"columns": columns, "data": historic}),
+            json!({"columns": ["time_period", "location", "rainfall"], "data": future}),
+        ));
+    }
+    (data, splits)
+}
+
+/// Train the mean model with `add_last` (forecasts depend on the history); (config id, artifact id).
+async fn train_add_last(app: &Router) -> (String, String) {
+    let (_, cfg, _) = call(
+        app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": format!("c{}", ulid::Ulid::generate()), "data": {"scale": 2.0, "add_last": true}})),
+    )
+    .await;
+    let (s, sub, _) = call(
+        app,
+        "POST",
+        "/api/v1/ml/$train",
+        Some(json!({"config_id": cfg["id"], "data": backtest_data()})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(finished(app, &sub).await["status"], "completed");
+    (
+        cfg["id"].as_str().unwrap().to_owned(),
+        sub["artifact_id"].as_str().unwrap().to_owned(),
+    )
+}
+
+#[tokio::test]
+async fn predict_splits_equals_predict_per_split() {
+    let app = app().await;
+    let (_, info, _) = call(&app, "GET", "/api/v1/info", None).await;
+    assert!(
+        info["extensions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("$predict-splits"))
+    );
+    let (config_id, model_id) = train_add_last(&app).await;
+    let ends = ["2023-06", "2023-08", "2023-10"];
+    let (data, splits) = splits_input(&ends);
+    let explicit: Vec<Value> = splits
+        .iter()
+        .map(|(h, f)| json!({"historic": h, "future": f}))
+        .collect();
+    let (s, res, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$predict-splits",
+        Some(json!({"artifact_id": model_id, "splits": explicit})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{res}");
+    let predictions = res["predictions"].as_array().unwrap();
+    assert_eq!(predictions.len(), 3);
+    assert_ne!(predictions[0], predictions[1], "history must matter");
+
+    // Each frame equals what $predict stores for that split alone.
+    for (i, (h, f)) in splits.iter().enumerate() {
+        let body = json!({"artifact_id": model_id, "historic": h, "future": f});
+        let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$predict", Some(body)).await;
+        assert_eq!(s, StatusCode::ACCEPTED);
+        assert_eq!(finished(&app, &sub).await["status"], "completed");
+        let uri = format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap());
+        let (_, art, _) = call(&app, "GET", &uri, None).await;
+        assert_eq!(art["data"]["content"], predictions[i], "split {i}");
+    }
+
+    // Answered directly, so nothing is stored: only the training and the three $predict artifacts.
+    let (_, all, _) = call(&app, "GET", "/api/v1/artifacts", None).await;
+    assert_eq!(all.as_array().unwrap().len(), 4, "{all}");
+
+    // One shared history cut at each split's end gives the same frames.
+    let shared: Vec<Value> = splits
+        .iter()
+        .zip(ends)
+        .map(|((_, f), end)| json!({"historic_end": end, "future": f}))
+        .collect();
+    let body = json!({"artifact_id": model_id, "config_id": config_id, "historic": data, "splits": shared});
+    let (s, res2, _) = call(&app, "POST", "/api/v1/ml/$predict-splits", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{res2}");
+    assert_eq!(res2["predictions"], res["predictions"]);
+}
+
+#[tokio::test]
+async fn predict_splits_runs_as_a_job_past_the_eager_budget() {
+    let app = chapkit::Service::new("mean", "Mean", MeanModel)
+        .database(":memory:")
+        .eager_wait(std::time::Duration::ZERO)
+        .app()
+        .await
+        .unwrap()
+        .build()
+        .0;
+    let (config_id, model_id) = train_add_last(&app).await;
+    let (_, splits) = splits_input(&["2023-06", "2023-09"]);
+    let mut predicted = vec![];
+    for (h, f) in &splits {
+        let body = json!({"artifact_id": model_id, "historic": h, "future": f});
+        let (_, sub, _) = call(&app, "POST", "/api/v1/ml/$predict", Some(body)).await;
+        assert_eq!(finished(&app, &sub).await["status"], "completed");
+        let uri = format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap());
+        predicted.push(call(&app, "GET", &uri, None).await.1["data"]["content"].clone());
+    }
+    let splits: Vec<Value> = splits
+        .iter()
+        .map(|(h, f)| json!({"historic": h, "future": f}))
+        .collect();
+    let (s, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$predict-splits",
+        Some(json!({"artifact_id": model_id, "splits": splits})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert!(
+        sub["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Prediction job submitted")
+    );
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    // The artifact holds the list, under the training artifact, as $predict stores its frame.
+    let uri = format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap());
+    let (_, art, _) = call(&app, "GET", &uri, None).await;
+    assert_eq!(art["data"]["type"], "ml_prediction_splits");
+    assert_eq!(art["parent_id"], model_id.as_str());
+    assert_eq!(art["data"]["metadata"]["config_id"], config_id.as_str());
+    assert_eq!(art["data"]["content"], json!(predicted));
+}
+
+#[tokio::test]
+async fn predict_splits_errors() {
+    let app = app().await;
+    let (_, model_id) = train_add_last(&app).await;
+    let (data, splits) = splits_input(&["2023-06"]);
+    let (h, f) = splits[0].clone();
+    let post = |body: Value| {
+        let app = app.clone();
+        async move { call(&app, "POST", "/api/v1/ml/$predict-splits", Some(body)).await }
+    };
+    let unknown = ulid::Ulid::generate().to_string();
+    let (s, p, _) =
+        post(json!({"artifact_id": unknown, "splits": [{"historic": h, "future": f}]})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{p}");
+    assert_eq!(p["status"], 404);
+
+    let bad = |splits: Value, historic: Option<&Value>| {
+        let mut body = json!({"artifact_id": model_id, "splits": splits});
+        if let Some(h) = historic {
+            body["historic"] = h.clone();
+        }
+        body
+    };
+    let no_location = json!({"columns": ["time_period", "rainfall"], "data": [["2023-07", 1.0]]});
+    let empty = json!({"columns": ["time_period", "location", "rainfall"], "data": []});
+    for (body, needle) in [
+        (bad(json!([]), None), "splits is empty"),
+        (
+            bad(json!([{"future": f}]), None),
+            "historic or historic_end is required",
+        ),
+        (
+            bad(json!([{"historic_end": "2023-06", "future": f}]), None),
+            "needs a shared historic",
+        ),
+        (
+            bad(
+                json!([{"historic": h, "historic_end": "2023-06", "future": f}]),
+                Some(&data),
+            ),
+            "not both",
+        ),
+        (
+            bad(json!([{"historic_end": "June", "future": f}]), Some(&data)),
+            "is not a period",
+        ),
+        (
+            bad(
+                json!([{"historic_end": "2019-01", "future": f}]),
+                Some(&data),
+            ),
+            "no rows up to",
+        ),
+        (
+            bad(json!([{"historic": h, "future": no_location}]), None),
+            "no 'location' column",
+        ),
+        (
+            bad(json!([{"historic": h, "future": empty}]), None),
+            "has no rows",
+        ),
+    ] {
+        let (s, p, _) = post(body).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{needle}: {p}");
+        assert!(
+            p["detail"].as_str().unwrap().contains(needle),
+            "{needle}: {p}"
+        );
+    }
+    // A config other than the training's.
+    let (_, other, _) = call(
+        &app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": "other", "data": {}})),
+    )
+    .await;
+    let mut body = bad(json!([{"historic": h, "future": f}]), None);
+    body["config_id"] = other["id"].clone();
+    let (s, p, _) = post(body).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+    // A frame that is not chapkit DataFrame JSON fails request validation.
+    let (s, _, _) = post(bad(
+        json!([{"historic": h, "future": {"columns": "x"}}]),
+        None,
+    ))
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// A `multipart/form-data` request with text fields and a `file`.
+async fn upload(
+    app: &Router,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &str)>,
+) -> (StatusCode, Value) {
+    use std::fmt::Write;
+    const B: &str = "chapkit-test-boundary";
+    let mut body = String::new();
+    for (k, v) in fields {
+        let _ = write!(
+            body,
+            "--{B}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+        );
+    }
+    if let Some((filename, content)) = file {
+        let _ = write!(
+            body,
+            "--{B}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: text/csv\r\n\r\n{content}\r\n"
+        );
+    }
+    let _ = write!(body, "--{B}--\r\n");
+    let req = Request::post("/api/v1/datasets")
+        .header("host", "testserver")
+        .header("content-type", format!("multipart/form-data; boundary={B}"))
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A stored artifact's `data.content`.
+async fn content(app: &Router, artifact_id: &Value) -> Value {
+    let uri = format!("/api/v1/artifacts/{}", artifact_id.as_str().unwrap());
+    let (s, artifact, _) = call(app, "GET", &uri, None).await;
+    assert_eq!(s, StatusCode::OK, "{artifact}");
+    artifact["data"]["content"].clone()
+}
+
+#[tokio::test]
+async fn datasets_are_stored_described_and_backtested() {
+    use std::fmt::Write;
+    let app = app().await;
+    let data = backtest_data();
+    let (s, d, headers) = call(
+        &app,
+        "POST",
+        "/api/v1/datasets",
+        Some(json!({"name": "monthly", "data": data})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{d}");
+    let id = d["id"].as_str().unwrap().to_owned();
+    assert!(
+        headers["location"]
+            .to_str()
+            .unwrap()
+            .ends_with(&format!("/api/v1/datasets/{id}"))
+    );
+    assert_eq!(
+        d.as_object().unwrap().keys().collect::<Vec<_>>(),
+        [
+            "columns",
+            "covariates",
+            "created_at",
+            "first_period",
+            "id",
+            "last_period",
+            "location_ids",
+            "locations",
+            "name",
+            "period_type",
+            "periods",
+            "rows",
+            "target",
+            "updated_at"
+        ]
+    );
+    assert_eq!(
+        (&d["target"], &d["rows"], &d["locations"], &d["periods"]),
+        (&json!("disease_cases"), &json!(48), &json!(2), &json!(24))
+    );
+    assert_eq!(d["location_ids"], json!(["A", "B"]));
+    assert_eq!(
+        (&d["period_type"], &d["first_period"], &d["last_period"]),
+        (&json!("month"), &json!("2022-01"), &json!("2023-12"))
+    );
+    assert_eq!(
+        d["columns"],
+        json!(["time_period", "location", "disease_cases", "rainfall"])
+    );
+    assert_eq!(d["covariates"], json!(["rainfall"]));
+
+    // A CSV upload with chap-core's weekly ranges, a text column and its own target name.
+    let mut csv = String::from("time_period,cases,parent,location,rain\n");
+    for (w, day) in [(1, 1), (2, 8), (3, 15)] {
+        for loc in ["x", "y"] {
+            let _ = writeln!(
+                csv,
+                "2024-01-{day:02}/2024-01-{:02},{w},p1,{loc},1.5",
+                day + 6
+            );
+        }
+    }
+    let (s, w) = upload(&app, &[("target", "cases")], Some(("weekly.csv", &csv))).await;
+    assert_eq!(s, StatusCode::CREATED, "{w}");
+    assert_eq!(w["name"], "weekly", "the file's name by default");
+    assert_eq!(
+        (&w["period_type"], &w["first_period"], &w["last_period"]),
+        (&json!("week"), &json!("2024W01"), &json!("2024W03"))
+    );
+    assert_eq!((&w["rows"], &w["periods"]), (&json!(6), &json!(3)));
+    assert_eq!(w["covariates"], json!(["rain"]));
+    let (s, j) = upload(
+        &app,
+        &[("name", "as json")],
+        Some(("data.json", &data.to_string())),
+    )
+    .await;
+    assert_eq!((s, &j["rows"]), (StatusCode::CREATED, &json!(48)), "{j}");
+
+    // Bad input: problem+json, 400 for the data, 422 for the request.
+    let cols =
+        |c: &[&str], rows: Value| json!({"name": "bad", "data": {"columns": c, "data": rows}});
+    for (body, status, needle) in [
+        (
+            cols(&["time_period", "disease_cases"], json!([["2024-01", 1]])),
+            StatusCode::BAD_REQUEST,
+            "no 'location' column",
+        ),
+        (
+            cols(
+                &["time_period", "location", "disease_cases"],
+                json!([["June", "A", 1]]),
+            ),
+            StatusCode::BAD_REQUEST,
+            "is not a month or week",
+        ),
+        (
+            cols(
+                &["time_period", "location", "disease_cases"],
+                json!([["2024-01", "A", 1], ["2024-01", "A", 2]]),
+            ),
+            StatusCode::BAD_REQUEST,
+            "more than one row",
+        ),
+        (
+            cols(
+                &["time_period", "location", "disease_cases"],
+                json!([["2024-01", "A", 1], ["2024W02", "A", 2]]),
+            ),
+            StatusCode::BAD_REQUEST,
+            "mixes monthly and weekly",
+        ),
+        (
+            cols(
+                &["time_period", "location", "disease_cases"],
+                json!([["2024-01", "A", "many"]]),
+            ),
+            StatusCode::BAD_REQUEST,
+            "is not numeric",
+        ),
+        (
+            cols(&["time_period", "location"], json!([["2024-01", "A"]])),
+            StatusCode::BAD_REQUEST,
+            "no target column",
+        ),
+        (
+            cols(&["time_period", "location", "disease_cases"], json!([])),
+            StatusCode::BAD_REQUEST,
+            "no rows",
+        ),
+        (
+            json!({"data": data}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Request validation failed",
+        ),
+        (
+            json!({"name": " ", "data": data}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Request validation failed",
+        ),
+    ] {
+        let (s, p, h) = call(&app, "POST", "/api/v1/datasets", Some(body)).await;
+        assert_eq!(s, status, "{needle}: {p}");
+        assert_eq!(h["content-type"], "application/problem+json");
+        assert!(p["detail"].as_str().unwrap().contains(needle), "{p}");
+    }
+    let (s, _) = upload(&app, &[("name", "no file")], None).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, p) = upload(
+        &app,
+        &[],
+        Some(("x.csv", "time_period,location\n2024-01,A\n")),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+
+    // List (paged like configs), get, data (all, or some locations).
+    let (_, all, _) = call(&app, "GET", "/api/v1/datasets", None).await;
+    assert_eq!(all.as_array().unwrap().len(), 3);
+    let (_, page, _) = call(&app, "GET", "/api/v1/datasets?page=2&size=2", None).await;
+    assert_eq!((&page["total"], &page["pages"]), (&json!(3), &json!(2)));
+    assert_eq!(page["items"][0]["name"], "as json");
+    let (s, got, _) = call(&app, "GET", &format!("/api/v1/datasets/{id}"), None).await;
+    assert_eq!((s, got), (StatusCode::OK, d.clone()));
+    let (_, frame, _) = call(&app, "GET", &format!("/api/v1/datasets/{id}/$data"), None).await;
+    assert_eq!(frame["columns"], data["columns"]);
+    assert_eq!(frame["data"], data["data"]);
+    let uri = format!("/api/v1/datasets/{id}/%24data?location=B&location=nowhere");
+    let (s, b, _) = call(&app, "GET", &uri, None).await;
+    assert_eq!(s, StatusCode::OK);
+    let rows = b["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 24);
+    assert!(rows.iter().all(|r| r[1] == "B"));
+
+    // A backtest of the stored dataset carries its id and every forecast against the truth.
+    let body = json!({"dataset_id": id, "periods": 2, "splits": 3, "stride": 2});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let stored = content(&app, &sub["artifact_id"]).await;
+    let inline = json!({"data": data, "periods": 2, "splits": 3, "stride": 2});
+    let (_, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(inline)).await;
+    finished(&app, &sub).await;
+    let given = content(&app, &sub["artifact_id"]).await;
+    assert_eq!(stored["dataset_id"], json!(id));
+    assert!(given.get("dataset_id").is_none());
+    assert_eq!(stored["aggregate"], given["aggregate"]);
+    assert_eq!(stored["forecasts"], given["forecasts"]);
+    let forecasts = stored["forecasts"].as_array().unwrap();
+    assert_eq!(forecasts.len(), 12);
+    let first = &forecasts[0];
+    assert_eq!(
+        first.as_object().unwrap().keys().collect::<Vec<_>>(),
+        [
+            "horizon",
+            "location",
+            "median",
+            "observed",
+            "q10",
+            "q25",
+            "q75",
+            "q90",
+            "split",
+            "time_period"
+        ]
+    );
+    assert_eq!(
+        (&first["split"], &first["horizon"], &first["location"]),
+        (&json!(0), &json!(1), &json!("A"))
+    );
+    assert!(first["observed"].as_f64().is_some());
+    // MeanModel's samples are all equal: every quantile is the forecast.
+    assert_eq!(first["q10"], first["median"]);
+    assert_eq!(forecasts.last().unwrap()["split"], 2);
+
+    // Its own target name is scored as disease_cases.
+    let (s, sub, _) = call(
+        &app,
+        "POST",
+        "/api/v1/ml/$backtest",
+        Some(json!({"dataset_id": w["id"], "periods": 1, "splits": 1})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    assert_eq!(content(&app, &sub["artifact_id"]).await["rows"], 2);
+
+    for (body, status) in [
+        (
+            json!({"dataset_id": id, "data": data}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (json!({}), StatusCode::BAD_REQUEST),
+        (
+            json!({"dataset_id": ulid::Ulid::generate().to_string()}),
+            StatusCode::NOT_FOUND,
+        ),
+        (json!({"dataset_id": "nope"}), StatusCode::BAD_REQUEST),
+    ] {
+        let (s, p, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+        assert_eq!(s, status, "{p}");
+    }
+
+    // Delete.
+    let uri = format!("/api/v1/datasets/{id}");
+    assert_eq!(
+        call(&app, "DELETE", &uri, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    for (method, uri) in [
+        ("GET", uri.clone()),
+        ("DELETE", uri.clone()),
+        ("GET", format!("{uri}/$data")),
+    ] {
+        assert_eq!(
+            call(&app, method, &uri, None).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let (s, _, _) = call(&app, "GET", "/api/v1/datasets/nope", None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn forecast_job_stores_the_forecast_ahead() {
+    let app = app().await;
+    let (_, info, _) = call(&app, "GET", "/api/v1/info", None).await;
+    for ext in ["$forecast", "datasets"] {
+        assert!(
+            info["extensions"].as_array().unwrap().contains(&json!(ext)),
+            "{ext}"
+        );
+    }
+    let data = backtest_data();
+    let (_, d, _) = call(
+        &app,
+        "POST",
+        "/api/v1/datasets",
+        Some(json!({"name": "monthly", "data": data})),
+    )
+    .await;
+    let (_, cfg, _) = call(
+        &app,
+        "POST",
+        "/api/v1/configs",
+        Some(json!({"name": "four", "data": {"prediction_periods": 4, "scale": 2.0}})),
+    )
+    .await;
+    let body = json!({"config_id": cfg["id"], "dataset_id": d["id"]});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$forecast", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert!(
+        sub["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Forecast job submitted")
+    );
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let (_, artifact, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/artifacts/{}", sub["artifact_id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    assert_eq!(artifact["data"]["type"], "ml_forecast");
+    assert_eq!(artifact["data"]["metadata"]["config_id"], cfg["id"]);
+    let result = &artifact["data"]["content"];
+    assert_eq!(
+        (
+            &result["dataset_id"],
+            &result["periods"],
+            &result["weather"]
+        ),
+        (&d["id"], &json!(4), &json!("climatology"))
+    );
+    assert_eq!(result["config"]["scale"], 2.0);
+    let forecasts = result["forecasts"].as_array().unwrap();
+    assert_eq!(forecasts.len(), 8, "2 locations x 4 periods");
+    assert_eq!(
+        forecasts[0].as_object().unwrap().keys().collect::<Vec<_>>(),
+        [
+            "location",
+            "median",
+            "q10",
+            "q25",
+            "q75",
+            "q90",
+            "time_period"
+        ]
+    );
+    assert_eq!(
+        (&forecasts[0]["location"], &forecasts[0]["time_period"]),
+        (&json!("A"), &json!("2024-01"))
+    );
+    assert_eq!(forecasts[3]["time_period"], "2024-04");
+    // MeanModel: twice location A's mean over the whole dataset.
+    let ys: Vec<f64> = data["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r[1] == "A")
+        .map(|r| r[2].as_f64().unwrap())
+        .collect();
+    let mean = ys.iter().sum::<f64>() / ys.len() as f64;
+    assert!((forecasts[0]["median"].as_f64().unwrap() - 2.0 * mean).abs() < 1e-9);
+    let frame = &result["frame"];
+    assert_eq!(frame["data"].as_array().unwrap().len(), 8);
+    assert!(
+        frame["columns"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("sample_0"))
+    );
+
+    // Inline data and options; damped persistence spelled either way.
+    let body = json!({"data": data, "periods": 2, "weather": "damped-persistence"});
+    let (s, sub, _) = call(&app, "POST", "/api/v1/ml/$forecast", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{sub}");
+    assert_eq!(finished(&app, &sub).await["status"], "completed");
+    let result = content(&app, &sub["artifact_id"]).await;
+    assert_eq!(result["weather"], "damped_persistence");
+    assert_eq!(result["dataset_id"], Value::Null);
+    assert_eq!(result["forecasts"].as_array().unwrap().len(), 4);
+
+    for (body, status, needle) in [
+        (
+            json!({"data": data, "weather": "observed"}),
+            StatusCode::BAD_REQUEST,
+            "cannot forecast ahead",
+        ),
+        (
+            json!({"data": data, "weather": "tomorrow"}),
+            StatusCode::BAD_REQUEST,
+            "unknown weather provider",
+        ),
+        (
+            json!({"data": data, "periods": 0}),
+            StatusCode::BAD_REQUEST,
+            "outside the model's bounds",
+        ),
+        (
+            json!({"dataset_id": d["id"], "data": data}),
+            StatusCode::BAD_REQUEST,
+            "not both",
+        ),
+        (json!({}), StatusCode::BAD_REQUEST, "is required"),
+        (
+            json!({"dataset_id": ulid::Ulid::generate().to_string()}),
+            StatusCode::NOT_FOUND,
+            "not found",
+        ),
+    ] {
+        let (s, p, _) = call(&app, "POST", "/api/v1/ml/$forecast", Some(body)).await;
+        assert_eq!(s, status, "{p}");
+        assert!(p["detail"].as_str().unwrap().contains(needle), "{p}");
+    }
+
+    // The artifact list filters by type; without the filter it lists everything, as chapkit.
+    let (_, forecasts, _) = call(&app, "GET", "/api/v1/artifacts?type=ml_forecast", None).await;
+    assert_eq!(forecasts.as_array().unwrap().len(), 2);
+    assert!(
+        forecasts
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["data"]["type"] == "ml_forecast" && a["data"].get("content").is_none())
+    );
+    let (_, page, _) = call(
+        &app,
+        "GET",
+        "/api/v1/artifacts?type=ml_forecast&page=1&size=1",
+        None,
+    )
+    .await;
+    assert_eq!((&page["total"], &page["pages"]), (&json!(2), &json!(2)));
+    let (_, none, _) = call(&app, "GET", "/api/v1/artifacts?type=ml_backtest", None).await;
+    assert_eq!(none, json!([]));
+    let (_, all, _) = call(&app, "GET", "/api/v1/artifacts", None).await;
+    assert_eq!(all.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn ui_is_served_and_the_root_redirects_to_it() {
+    let get = |app: Router, uri: &'static str| async move {
+        let req = Request::get(uri).body(Body::empty()).unwrap();
+        app.oneshot(req).await.unwrap()
+    };
+    let app = app().await;
+    let res = get(app.clone(), "/").await;
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(res.headers()["location"], "/ui/");
+    for uri in ["/ui/", "/ui/datasets/01J0000000000000000000000"] {
+        let res = get(app.clone(), uri).await;
+        assert_eq!(res.status(), StatusCode::OK, "{uri}");
+        assert_eq!(res.headers()["content-type"], "text/html; charset=utf-8");
+        assert_eq!(res.headers()["cache-control"], "no-cache");
+    }
+    // The API keeps answering problem+json for unknown routes.
+    let res = get(app.clone(), "/api/v1/nothing").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // With API keys the UI's files stay open, its API calls do not.
+    let keys = chapkit::http::middleware::ApiKeys::new(["secret".to_owned()].into());
+    let app = chapkit::Service::new("mean", "Mean", MeanModel)
+        .database(":memory:")
+        .app()
+        .await
+        .unwrap()
+        .auth(keys)
+        .build()
+        .0;
+    assert_eq!(get(app.clone(), "/ui/").await.status(), StatusCode::OK);
+    assert_eq!(
+        get(app.clone(), "/").await.status(),
+        StatusCode::TEMPORARY_REDIRECT
+    );
+    assert_eq!(
+        get(app, "/api/v1/datasets").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 }

@@ -5,6 +5,9 @@ in one call, so a backtest of a chapkit model makes one round trip per training 
 keeps everything it does today: it splits the data, fills the future weather, scores the forecasts and stores them.
 Services that do not offer the endpoint are run exactly as now.
 
+**Status:** chapkit-rs implements the endpoint as described below (see [Implemented in
+chapkit-rs](#implemented-in-chapkit-rs)); chap-core does not use it yet.
+
 ## The problem, measured
 
 In the [full-stack run](../guide/full-stack.md) (chap-core 2.7.0 from `master`, 136 districts, weekly, 12 periods,
@@ -62,6 +65,35 @@ stays in chap-core.
 For the run above: 7 `$predict` round trips become 1, so the per-split overhead (about 28 s of the 42 s) mostly
 goes, and the time left is chap-core's preparation, one training and one prediction call. The gain grows with
 the number of splits.
+
+## Implemented in chapkit-rs
+
+`POST /api/v1/ml/$predict-splits` takes `artifact_id`, an optional `config_id` (checked against the training
+artifact's config), `run_info` and `geo` as in `$predict`, and `splits`. Each split gives `future` and either its
+own `historic` or `historic_end`, the last period of a shared top-level `historic` it sees. Every split runs with the
+warm trained model in one blocking call, and its frame equals what `$predict` stores for that split alone (pinned
+in `tests/contract.rs`).
+
+- Done within the eager budget (`CHAPKIT_EAGER_WAIT_MS`, default 1 s): 200 with `{"predictions": [frame, ...]}`,
+  nothing stored, like `$predict-sync`.
+- Otherwise: 202 with `job_id` and `artifact_id`, like `$predict`; the job's `ml_prediction_splits` artifact,
+  a child of the training artifact, holds the list in `data.content`.
+- 404 for an unknown training artifact; 400 for an empty `splits`, a split without history, a `historic_end`
+  that is not a period or cuts no rows, a frame without rows or without `time_period` and `location`, or another
+  config; 422 for a body that is not chapkit dataframe JSON.
+
+Measured in-process with criterion (`make bench BENCH=backtest_forecasts`; HTTP router in-process, no network),
+136 locations x 300 weeks, 7 splits of 12 weeks, stride 4, 100 samples per forecast:
+
+| | time | request size |
+|---|---|---|
+| 7 `$predict` calls, each with its job status and artifact read (chap-core's flow) | 302 ms | 19.1 MB |
+| one `$predict-splits`, each split with its own history | 161 ms | 19.1 MB |
+| one `$predict-splits`, one shared history | 106 ms | 3.6 MB |
+
+In-process the gain is a factor 2 to 3, mostly from not storing and re-reading seven prediction artifacts and from
+parsing the history once. The larger gain is outside the service: chap-core's roughly 4 s around each `$predict`
+in the full-stack run is paid once instead of seven times.
 
 ## Questions for the chap-core team
 

@@ -54,7 +54,7 @@ from chap_core.rest_api.db_worker_functions import validate_and_filter_dataset_f
 from chap_core.spatio_temporal_data.temporal_dataclass import DataSet
 
 OUT = Path(os.environ.get("FIXTURES_OUT") or Path(__file__).resolve().parent.parent / "crates/chapkit-eval/fixtures")
-PROVIDERS = ["climatology", "damped_persistence", "observed"]
+PROVIDERS = ["climatology", "damped_persistence", "observed", "mstl_arima"]
 
 
 def monthly(i: int) -> str:
@@ -246,17 +246,7 @@ def metrics_of(ds: DataSet, estimator, params: dict, stored: DataSet) -> dict:
         by[dim.value] = {}
         for metric_id, cls in available_metrics.items():
             metric = cls()
-            try:
-                df = metric.get_metric(flat.observations, flat.forecasts, dimensions=(dim,))
-            except ValueError:
-                # chap-core 2.7.0's grouped root-mean-square (RMSE) loses the group column; the
-                # same aggregation, applied to chap-core's own detailed values.
-                detailed = metric.get_detailed_metric(flat.observations, flat.forecasts)
-                df = (
-                    detailed.groupby(dim.value)["metric"]
-                    .apply(lambda x: np.sqrt((x**2).mean()))
-                    .reset_index()
-                )
+            df = metric.get_metric(flat.observations, flat.forecasts, dimensions=(dim,))
             by[dim.value][metric_id] = {str(k): cell(v) for k, v in zip(df[dim.value], df["metric"], strict=True)}
 
     forecasts = []

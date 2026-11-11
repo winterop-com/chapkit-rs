@@ -1,4 +1,5 @@
-//! `/api/v1/ml`: `$train`, `$predict`, `$validate`, plus the Rust-only fast path `$predict-sync`.
+//! `/api/v1/ml`: `$train`, `$predict`, `$validate`, plus the chapkit-rs extensions (`$predict-sync`,
+//! `$predict-splits`, `$explain`, `$backtest`, `$forecast`, `$hpo`).
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -9,8 +10,9 @@ use utoipa_axum::routes;
 
 use crate::state::AppState;
 use crate::wire::{
-    BacktestRequest, Diagnostic, ExplainRequest, ExplainResponse, HpoRequest, JobSubmitted,
-    PredictRequest, TrainRequest, ValidateRequest, ValidateResponse,
+    BacktestRequest, Diagnostic, ExplainRequest, ExplainResponse, ForecastRequest, HpoRequest,
+    JobSubmitted, PredictRequest, PredictSplitsRequest, PredictSplitsResponse, TrainRequest,
+    ValidateRequest, ValidateResponse,
 };
 use crate::{analysis, ml};
 
@@ -39,7 +41,7 @@ async fn train(
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
     let config_id = ulid_field("config_id", &req.config_id)?;
     chapkit_http::metrics::inc("ml_train_jobs_total", "Training jobs submitted.", &[]);
-    let artifact_id = ulid::Ulid::generate().to_string();
+    let artifact_id = chapkit_http::ids::new_id().to_string();
     let work = Box::pin(ml::train(
         s.clone(),
         artifact_id.clone(),
@@ -68,7 +70,7 @@ async fn predict(
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
     let artifact_id = ulid_field("artifact_id", &req.artifact_id)?;
     chapkit_http::metrics::inc("ml_predict_jobs_total", "Prediction jobs submitted.", &[]);
-    let prediction_id = ulid::Ulid::generate().to_string();
+    let prediction_id = chapkit_http::ids::new_id().to_string();
     let work = Box::pin(ml::predict(
         s.clone(),
         prediction_id.clone(),
@@ -114,14 +116,181 @@ async fn predict_sync(
         req.run_info.as_ref(),
     )
     .await
-    .map_err(|e| {
-        if e.message.contains("not found") {
-            Problem::not_found(e.message)
-        } else {
-            Problem::bad_request(format!("{}: {}", e.kind, e.message))
-        }
-    })?;
+    .map_err(job_problem)?;
     Ok(axum::Json(frame))
+}
+
+/// A failed load or check before any model call: 404 for a missing artifact, else 400.
+fn job_problem(e: chapkit_http::JobError) -> Problem {
+    if e.message.contains("not found") {
+        Problem::not_found(e.message)
+    } else {
+        Problem::bad_request(format!("{}: {}", e.kind, e.message))
+    }
+}
+
+/// `frame` has rows and `time_period` and `location` columns.
+fn check_split_frame(frame: &DataFrame, what: &str) -> ApiResult<()> {
+    if frame.is_empty() {
+        return Err(Problem::bad_request(format!("{what} has no rows")));
+    }
+    for c in [cols::TIME_PERIOD, cols::LOCATION] {
+        if !frame.has(c) {
+            return Err(Problem::bad_request(format!("{what} has no '{c}' column")));
+        }
+    }
+    Ok(())
+}
+
+/// Each split's history (its own, or the shared one cut at `historic_end`), checked frames and run settings.
+fn resolve_splits(
+    s: &AppState,
+    historic: Option<&DataFrame>,
+    raw: Vec<crate::wire::SplitIn>,
+    run_info: Option<&crate::wire::RunInfoIn>,
+    config: &serde_json::Value,
+) -> ApiResult<Vec<ml::Split>> {
+    let shared = match historic {
+        Some(h) => {
+            check_split_frame(h, "historic")?;
+            Some((h, ml::frame_periods(h).map_err(Problem::bad_request)?))
+        }
+        None => None,
+    };
+    let mut splits = Vec::with_capacity(raw.len());
+    for (i, split) in raw.into_iter().enumerate() {
+        let historic = match (split.historic, split.historic_end, &shared) {
+            (Some(h), None, _) => h,
+            (None, Some(end), Some((h, periods))) => ml::history_until(h, periods, &end)
+                .map_err(|m| Problem::bad_request(format!("splits[{i}]: {m}")))?,
+            (None, Some(_), None) => {
+                return Err(Problem::bad_request(format!(
+                    "splits[{i}]: historic_end needs a shared historic"
+                )));
+            }
+            (Some(_), Some(_), _) => {
+                return Err(Problem::bad_request(format!(
+                    "splits[{i}]: give historic or historic_end, not both"
+                )));
+            }
+            (None, None, _) => {
+                return Err(Problem::bad_request(format!(
+                    "splits[{i}]: historic or historic_end is required"
+                )));
+            }
+        };
+        check_split_frame(&historic, &format!("splits[{i}].historic"))?;
+        check_split_frame(&split.future, &format!("splits[{i}].future"))?;
+        let run = ml::resolve_run(s, run_info, config, Some(&split.future))
+            .map_err(|e| Problem::bad_request(format!("splits[{i}]: {}", e.message)))?;
+        splits.push(ml::Split {
+            historic,
+            future: split.future,
+            run,
+        });
+    }
+    Ok(splits)
+}
+
+/// Forecast every backtest split of one training in one call: each split's frame equals what
+/// `$predict` stores for that split alone. Splits give `historic`, or `historic_end` to cut the
+/// shared `historic`. Answers 200 with the frames when they are ready within the eager budget
+/// (nothing stored, like `$predict-sync`), else 202 with a job whose `ml_prediction_splits`
+/// artifact holds the list, like `$predict`.
+/// chapkit-rs extension; not part of Python chapkit.
+#[utoipa::path(post, path = "/$predict-splits", tag = "ML", request_body = PredictSplitsRequest,
+    responses((status = OK, body = PredictSplitsResponse), (status = ACCEPTED, body = JobSubmitted),
+        (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn predict_splits(
+    State(s): State<AppState>,
+    Json(req): Json<PredictSplitsRequest>,
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let artifact_id = ulid_field("artifact_id", &req.artifact_id)?;
+    let wanted_config = req
+        .config_id
+        .as_deref()
+        .map(|c| ulid_field("config_id", c))
+        .transpose()?;
+    if req.splits.is_empty() {
+        return Err(Problem::bad_request("splits is empty"));
+    }
+    let (trained, config, artifact) = ml::load_trained(&s, &artifact_id)
+        .await
+        .map_err(job_problem)?;
+    let config_id = artifact
+        .data
+        .get("metadata")
+        .and_then(|m| crate::state::str_field(m, "config_id"))
+        .unwrap_or_default()
+        .to_owned();
+    if let Some(c) = wanted_config
+        && c != config_id
+    {
+        return Err(Problem::bad_request(format!(
+            "config_id {c} is not the config of training artifact {artifact_id}"
+        )));
+    }
+    let splits = resolve_splits(
+        &s,
+        req.historic.as_ref(),
+        req.splits,
+        req.run_info.as_ref(),
+        &config,
+    )?;
+    let (started_at, start) = (chapkit_http::time::job_now(), std::time::Instant::now());
+    // The forecasts run at once, bounded like $predict-sync. Finished within the eager budget,
+    // they are the answer; otherwise a job takes them over and stores them, like $predict.
+    let state = s.clone();
+    let mut run = tokio::spawn(async move {
+        let _permit = state
+            .inner
+            .sync_permits
+            .acquire()
+            .await
+            .map_err(|_| chapkit_http::JobError::runtime("shutting down"))?;
+        ml::predict_split_frames(&state, trained, config, splits, req.geo).await
+    });
+    if !s.inner.eager_wait.is_zero()
+        && let Ok(joined) = tokio::time::timeout(s.inner.eager_wait, &mut run).await
+    {
+        let predictions = joined
+            .map_err(|_| Problem::internal())?
+            .map_err(job_problem)?;
+        return Ok(axum::Json(PredictSplitsResponse { predictions }).into_response());
+    }
+    chapkit_http::metrics::inc(
+        "ml_predict_splits_jobs_total",
+        "Prediction jobs over backtest splits submitted.",
+        &[],
+    );
+    let prediction_id = chapkit_http::ids::new_id().to_string();
+    let (state, id) = (s.clone(), prediction_id.clone());
+    let work = Box::pin(async move {
+        let frames = run
+            .await
+            .map_err(|_| chapkit_http::JobError::runtime("the forecasts panicked"))??;
+        ml::store_split_predictions(
+            &state,
+            id,
+            artifact_id,
+            &config_id,
+            &frames,
+            started_at,
+            start,
+        )
+        .await
+    });
+    let job_id = s.inner.jobs.submit(work);
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(JobSubmitted {
+            job_id: job_id.to_string(),
+            artifact_id: prediction_id,
+            message: format!("Prediction job submitted. Job ID: {job_id}"),
+        }),
+    )
+        .into_response())
 }
 
 /// Explain one forecast cell with LIME or KernelSHAP, computed in-process: every
@@ -141,13 +310,6 @@ async fn explain(
         .acquire()
         .await
         .map_err(|_| Problem::internal())?;
-    let job_problem = |e: chapkit_http::JobError| {
-        if e.message.contains("not found") {
-            Problem::not_found(e.message)
-        } else {
-            Problem::bad_request(format!("{}: {}", e.kind, e.message))
-        }
-    };
     let (trained, config, _) = ml::load_trained(&s, &artifact_id)
         .await
         .map_err(job_problem)?;
@@ -204,8 +366,9 @@ async fn explain(
     }))
 }
 
-/// Backtest the model on a dataset in-process, scored as chap-core scores it. Returns 202; the
-/// result (as `<bin> eval --json` prints it) is stored as an `ml_backtest` artifact.
+/// Backtest the model on a dataset (`data`, or a stored `dataset_id`) in-process, scored as
+/// chap-core scores it. Returns 202; the result (as `<bin> eval --json` prints it, with every
+/// forecast's quantiles against the truth) is stored as an `ml_backtest` artifact.
 /// chapkit-rs extension; not part of Python chapkit.
 #[utoipa::path(post, path = "/$backtest", tag = "ML", request_body = BacktestRequest,
     responses((status = ACCEPTED, body = JobSubmitted), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
@@ -214,13 +377,16 @@ async fn backtest(
     Json(req): Json<BacktestRequest>,
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
     let plan = analysis::plan(&s, req.config_id.as_deref(), req.config, &req.settings).await?;
+    let (data, dataset_id) =
+        crate::routes::datasets::request_data(&s, req.dataset_id.as_deref(), req.data).await?;
     chapkit_http::metrics::inc("ml_backtest_jobs_total", "Backtest jobs submitted.", &[]);
-    let artifact_id = ulid::Ulid::generate().to_string();
+    let artifact_id = chapkit_http::ids::new_id().to_string();
     let work = Box::pin(analysis::backtest(
         s.clone(),
         artifact_id.clone(),
         plan,
-        req.data,
+        data,
+        dataset_id,
     ));
     let job_id = submit_eager(&s, work).await;
     Ok((
@@ -229,6 +395,47 @@ async fn backtest(
             job_id: job_id.to_string(),
             artifact_id,
             message: format!("Backtest job submitted. Job ID: {job_id}"),
+        }),
+    ))
+}
+
+/// Forecast past the end of a dataset (`data`, or a stored `dataset_id`), as chap-core's
+/// `forecast_ahead`: train on all of it, give the model the next `periods` periods' covariates
+/// from the weather provider, and predict. Returns 202; the forecast (each location and period's
+/// quantiles, and the prediction frame) is stored as an `ml_forecast` artifact.
+/// chapkit-rs extension; not part of Python chapkit.
+#[utoipa::path(post, path = "/$forecast", tag = "ML", request_body = ForecastRequest,
+    responses((status = ACCEPTED, body = JobSubmitted), (status = BAD_REQUEST, body = Problem), (status = NOT_FOUND, body = Problem)))]
+async fn forecast(
+    State(s): State<AppState>,
+    Json(req): Json<ForecastRequest>,
+) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
+    let plan = analysis::forecast_plan(
+        &s,
+        req.config_id.as_deref(),
+        req.config,
+        req.periods,
+        req.weather.as_deref(),
+    )
+    .await?;
+    let (data, dataset_id) =
+        crate::routes::datasets::request_data(&s, req.dataset_id.as_deref(), req.data).await?;
+    chapkit_http::metrics::inc("ml_forecast_jobs_total", "Forecast jobs submitted.", &[]);
+    let artifact_id = chapkit_http::ids::new_id().to_string();
+    let work = Box::pin(analysis::forecast(
+        s.clone(),
+        artifact_id.clone(),
+        plan,
+        data,
+        dataset_id,
+    ));
+    let job_id = submit_eager(&s, work).await;
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(JobSubmitted {
+            job_id: job_id.to_string(),
+            artifact_id,
+            message: format!("Forecast job submitted. Job ID: {job_id}"),
         }),
     ))
 }
@@ -243,7 +450,7 @@ async fn hpo(
     State(s): State<AppState>,
     Json(mut req): Json<HpoRequest>,
 ) -> ApiResult<(StatusCode, axum::Json<JobSubmitted>)> {
-    let artifact_id = ulid::Ulid::generate().to_string();
+    let artifact_id = chapkit_http::ids::new_id().to_string();
     let search = analysis::search_plan(&s, &mut req, &artifact_id).await?;
     chapkit_http::metrics::inc(
         "ml_hpo_jobs_total",
@@ -545,8 +752,10 @@ pub fn router(state: AppState) -> OpenApiRouter {
         .routes(routes!(train))
         .routes(routes!(predict))
         .routes(routes!(predict_sync))
+        .routes(routes!(predict_splits))
         .routes(routes!(explain))
         .routes(routes!(backtest))
+        .routes(routes!(forecast))
         .routes(routes!(hpo))
         .routes(routes!(generate_sample_data))
         .routes(routes!(validate))

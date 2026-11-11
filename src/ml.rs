@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use chapkit_core::{
-    Checkpoint, DataFrame, Geo, PredictInput, Provenance, RunInfo, TrainInput, cols,
+    Checkpoint, DataFrame, Geo, Period, PredictInput, Provenance, RunInfo, TrainInput, cols,
 };
 use chapkit_http::JobError;
 use chapkit_http::time::{entity_now, job_now};
@@ -21,6 +21,8 @@ pub const TRAINING_TYPE: &str = "ml_training";
 pub const PREDICTION_TYPE: &str = "ml_prediction";
 /// Content type of training checkpoints.
 pub const SAFETENSORS: &str = "application/vnd.safetensors";
+/// Artifact `data.type` of `$predict-splits` artifacts: `content` is the list of prediction frames.
+pub const PREDICTION_SPLITS_TYPE: &str = "ml_prediction_splits";
 /// Content type of prediction frames (chapkit's).
 pub const DATAFRAME_JSON: &str = "application/vnd.chapkit.dataframe+json";
 
@@ -257,12 +259,17 @@ pub(crate) async fn predict_frame(
     })
     .await?
     .map_err(|e| model_error(&e))?;
+    check_output(&out)?;
+    Ok((out, config))
+}
+
+fn check_output(out: &DataFrame) -> Result<(), JobError> {
     if !out.has(cols::TIME_PERIOD) || !out.has(cols::LOCATION) {
         return Err(JobError::runtime(
             "model output is missing time_period or location columns",
         ));
     }
-    Ok((out, config))
+    Ok(())
 }
 
 /// Run a prediction job: predict and store the prediction artifact under the training artifact.
@@ -309,6 +316,112 @@ pub(crate) async fn predict(
         },
         "content": content,
         "content_type": DATAFRAME_JSON,
+        "content_size": null,
+    });
+    state
+        .store()
+        .insert_artifact(NewArtifact {
+            id: prediction_id,
+            parent_id: Some(artifact_id),
+            data,
+            tags: vec![],
+            content: None,
+            created_at: entity_now(),
+        })
+        .await
+        .map_err(|e| store_error(&e))?;
+    Ok(())
+}
+
+/// The rows of `historic` up to and including `end`, each row's period parsed once in `periods`.
+pub(crate) fn history_until(
+    historic: &DataFrame,
+    periods: &[Period],
+    end: &str,
+) -> Result<DataFrame, String> {
+    let end_period =
+        Period::parse(end).ok_or_else(|| format!("historic_end '{end}' is not a period"))?;
+    let mask: Vec<bool> = periods.iter().map(|p| *p <= end_period).collect();
+    let cut = historic.filter(&mask).map_err(|e| e.to_string())?;
+    if cut.is_empty() {
+        return Err(format!("historic has no rows up to {end}"));
+    }
+    Ok(cut)
+}
+
+/// The periods of a frame's `time_period` column, all parsed.
+pub(crate) fn frame_periods(frame: &DataFrame) -> Result<Vec<Period>, String> {
+    let tp = frame
+        .column(cols::TIME_PERIOD)
+        .ok_or("historic has no 'time_period' column")?;
+    (0..frame.n_rows())
+        .map(|i| {
+            tp.str_at(i)
+                .and_then(Period::parse)
+                .ok_or_else(|| format!("historic row {i}: time_period is not a period"))
+        })
+        .collect()
+}
+
+/// A checked `$predict-splits` split: its inputs and run settings.
+pub(crate) struct Split {
+    pub historic: DataFrame,
+    pub future: DataFrame,
+    pub run: RunInfo,
+}
+
+/// Predict every split with the trained model, in order, in one blocking call.
+pub(crate) async fn predict_split_frames(
+    state: &AppState,
+    trained: Trained,
+    config: Value,
+    splits: Vec<Split>,
+    geo: Option<Geo>,
+) -> Result<Vec<DataFrame>, JobError> {
+    let model = state.model().clone();
+    let frames = chapkit_http::jobs::blocking(move || {
+        splits
+            .iter()
+            .map(|s| {
+                model.predict(
+                    &trained,
+                    &config,
+                    PredictInput::new(&s.historic, &s.future, &s.run, geo.as_ref()),
+                )
+            })
+            .collect::<chapkit_core::Result<Vec<_>>>()
+    })
+    .await?
+    .map_err(|e| model_error(&e))?;
+    for f in &frames {
+        check_output(f)?;
+    }
+    Ok(frames)
+}
+
+/// Store `$predict-splits` forecasts as one artifact under the training artifact.
+pub(crate) async fn store_split_predictions(
+    state: &AppState,
+    prediction_id: String,
+    artifact_id: String,
+    config_id: &str,
+    frames: &[DataFrame],
+    started_at: String,
+    start: Instant,
+) -> Result<(), JobError> {
+    let content = serde_json::to_value(frames).map_err(|e| JobError::runtime(e.to_string()))?;
+    let data = json!({
+        "type": PREDICTION_SPLITS_TYPE,
+        "metadata": {
+            "status": "success",
+            "config_id": config_id,
+            "started_at": started_at,
+            "completed_at": job_now(),
+            "duration_seconds": start.elapsed().as_secs_f64(),
+            "n_splits": frames.len(),
+        },
+        "content": content,
+        "content_type": "application/json",
         "content_size": null,
     });
     state

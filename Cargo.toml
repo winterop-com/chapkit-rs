@@ -14,8 +14,10 @@ chapkit-flow.workspace = true
 chapkit-store.workspace = true
 chapkit-xai.workspace = true
 chapkit-eval.workspace = true
+chapkit-ts.workspace = true
 chapkit-hpo.workspace = true
-axum.workspace = true
+chapkit-ui = { workspace = true, optional = true }
+axum = { workspace = true, features = ["multipart"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -41,9 +43,16 @@ serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true
 ulid.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "predict_splits"
+harness = false
 
 [features]
-default = []
+default = ["ui"]
+# The web UI at /ui/ (crates/chapkit-ui), and / redirected to it.
+ui = ["dep:chapkit-ui"]
 # turso storage backend (DATABASE_URL=turso:///path).
 turso = ["chapkit-store/turso"]
 # DataFrame::to_polars / from_polars, and chapkit::polars re-exported.
@@ -93,7 +102,10 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 chapkit-xai = { path = "crates/chapkit-xai" }
 chapkit-eval = { path = "crates/chapkit-eval" }
+chapkit-ts = { path = "crates/chapkit-ts" }
 chapkit-hpo = { path = "crates/chapkit-hpo" }
+chapkit-ui = { path = "crates/chapkit-ui" }
+rust-embed = { version = "8.13", features = ["debug-embed", "mime-guess"] }
 async-trait = "0.1"
 futures-util = "0.3"
 turso = { version = "0.8.3", default-features = false }
@@ -125,6 +137,10 @@ return_self_not_must_use = "allow"
 doc_markdown = "allow"
 result_large_err = "allow"
 many_single_char_names = "allow"
+
+# The numeric code (ARIMA likelihoods, STL) runs slowly unoptimised; tests use it heavily.
+[profile.dev.package.chapkit-ts]
+opt-level = 3
 
 [profile.bench]
 debug = true

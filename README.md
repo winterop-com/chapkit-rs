@@ -31,6 +31,10 @@ Every model binary also backtests itself in-process with chap-core's splits, wea
 `$backtest` as a job), and searches its hyperparameters with a backtest per trial (`hpo`, `$hpo`), about 2000
 trials per second for a baseline-sized model.
 
+Every model binary also serves a web UI for its model at `/ui/` (`<bin> serve`, then
+<http://127.0.0.1:8000/ui/>): upload a dataset, backtest the model on it, see the forecasts against the
+truth, and forecast ahead ([guide](docs/src/guide/ui.md)).
+
 Shell, R and Python models stay on Python chapkit. chapkit-rs only covers in-process Rust models.
 
 ## Getting started
@@ -57,11 +61,13 @@ write and serve a model package, testing with chap-core, and the results.
 | `chapkit` (root) | What model authors depend on. `Service` turns a `Model` into the full chapkit HTTP API. |
 | `chapkit-core` | The model contract: `Model` trait, run and model info, search spaces, periods, safetensors checkpoints, RNG, synthetic data. Pure: no IO. |
 | `chapkit-xai` | LIME and KernelSHAP over forecasts, in-process and parallel. |
+| `chapkit-ts` | Time series for models and evaluation: STL, KPSS, R's `stats::arima` and fable's ARIMA search, with R's numbers. Pure: no IO. |
 | `chapkit-eval` | chap-core's backtest in-process: splits, future weather, metrics, with chap-core's numbers. Pure: no IO. |
 | `chapkit-hpo` | Hyperparameter search: random and grid over a model's search space, each trial an in-process backtest, in parallel. Pure: no IO. |
 | `chapkit-dataframe` | Columnar `DataFrame` with the chapkit `{columns, data}` wire format. |
 | `chapkit-http` | servicekit-compatible plumbing: problem+json errors, jobs, health, system, SSE, metrics, auth, registration, OpenAPI. |
 | `chapkit-store` | Persistence behind an async `Store` trait; SQLite backend, turso backend (feature `turso`). |
+| `chapkit-ui` | The web UI, embedded in every model binary and served at `/ui/`. |
 
 Model packages (ports of chap-core's baselines, checked against chap-core number for number, and a
 covariate model for xAI/HPO) live next door in `../chapkit-rs-models`.

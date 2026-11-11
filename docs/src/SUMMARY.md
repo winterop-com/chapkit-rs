@@ -34,6 +34,7 @@
 - [Testing with chap-core](guide/chap-core.md)
 - [Backtests in-process](guide/eval.md)
 - [Hyperparameter search](guide/hpo.md)
+- [The web UI](guide/ui.md)
 - [Full stack: chap-core, DHIS2, Modeling App](guide/full-stack.md)
 - [Sample data](guide/sample-data.md)
 

@@ -7,6 +7,7 @@
 mod app;
 pub mod extract;
 pub mod health;
+pub mod ids;
 pub mod jobs;
 pub mod metrics;
 pub mod middleware;

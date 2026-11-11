@@ -13,6 +13,6 @@ bodies and responses. Three things keep it honest:
 3. **Served.** Every service serves `/openapi.json` and interactive docs at `/docs` (Scalar).
 
 Current state against Python chapkit 2.6: every one of its 38 operations exists in chapkit-rs, plus
-`$predict-sync`, `$explain`, `$backtest` and `$hpo`. The remaining differences are cosmetic: `/api/v1/system` has an extra
+`$predict-sync`, `$predict-splits`, `$explain`, `$backtest` and `$hpo`. The remaining differences are cosmetic: `/api/v1/system` has an extra
 `chapkit_rs_version` field, `/api/v1/system/apps` returns an empty list (no bundled web apps), and
 `$validate` documents one flat request body where Python documents two variants.

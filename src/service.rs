@@ -134,7 +134,7 @@ impl Service {
             "chapkit_version": format!("{CHAPKIT_API_VERSION}+chapkit-rs.{}", env!("CARGO_PKG_VERSION")),
             "chapkit_rs_version": env!("CARGO_PKG_VERSION"),
             "servicekit_version": null,
-            "extensions": ["$predict-sync", "$explain", "$backtest", "$hpo"],
+            "extensions": ["$predict-sync", "$predict-splits", "$explain", "$backtest", "$forecast", "$hpo", "datasets"],
         })
     }
 
@@ -172,9 +172,14 @@ impl Service {
         if let Some(bytes) = self.max_body_bytes {
             app = app.max_body_bytes(bytes);
         }
+        #[cfg(feature = "ui")]
+        {
+            app = app.merge(chapkit_ui::router().into());
+        }
         Ok(app
             .health_check("database", check)
             .nest("/api/v1/configs", routes::configs::router(state.clone()))
+            .nest("/api/v1/datasets", routes::datasets::router(state.clone()))
             .nest(
                 "/api/v1/artifacts",
                 routes::artifacts::router(state.clone()),

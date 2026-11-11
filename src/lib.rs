@@ -36,6 +36,7 @@ pub use chapkit_flow as flow;
 pub use chapkit_hpo as hpo;
 pub use chapkit_http as http;
 pub use chapkit_store as store;
+pub use chapkit_ts as ts;
 pub use chapkit_xai as xai;
 pub use erased::{DynModel, Erased, RESERVED_KEYS, Trained};
 pub use service::{CHAPKIT_API_VERSION, Service};

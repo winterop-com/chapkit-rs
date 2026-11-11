@@ -27,14 +27,18 @@ pub(crate) struct Plan {
     pub weather: String,
 }
 
-/// Resolve the config (stored, given or default) and the settings, and check them.
-pub(crate) async fn plan(
+/// A weather provider id as chap-core writes it: `damped-persistence` is `damped_persistence`.
+pub(crate) fn weather_id(raw: &str) -> String {
+    raw.trim().replace('-', "_")
+}
+
+/// The config of a request: the stored `config_id`, the given `config`, or neither.
+async fn request_config(
     state: &AppState,
     config_id: Option<&str>,
     config: Option<Value>,
-    settings: &BacktestSettings,
-) -> Result<Plan, Problem> {
-    let (config_id, base) = match (config_id, config) {
+) -> Result<(Option<String>, Option<Value>), Problem> {
+    Ok(match (config_id, config) {
         (Some(_), Some(_)) => {
             return Err(Problem::bad_request("give config_id or config, not both"));
         }
@@ -49,7 +53,17 @@ pub(crate) async fn plan(
             (Some(id), Some(row.data))
         }
         (None, config) => (None, config),
-    };
+    })
+}
+
+/// Resolve the config (stored, given or default) and the settings, and check them.
+pub(crate) async fn plan(
+    state: &AppState,
+    config_id: Option<&str>,
+    config: Option<Value>,
+    settings: &BacktestSettings,
+) -> Result<Plan, Problem> {
+    let (config_id, base) = request_config(state, config_id, config).await?;
     let periods = settings.periods.unwrap_or_else(|| {
         base.as_ref()
             .and_then(|c| c.get("prediction_periods"))
@@ -70,8 +84,8 @@ pub(crate) async fn plan(
     };
     let weather = settings
         .weather
-        .clone()
-        .unwrap_or_else(|| "climatology".into());
+        .as_deref()
+        .map_or_else(|| "climatology".into(), weather_id);
     let model = state.model().as_ref();
     check(model, &options, &weather).map_err(Problem::bad_request)?;
     let config = backtest_config(model, base, periods).map_err(Problem::bad_request)?;
@@ -132,6 +146,7 @@ pub(crate) async fn backtest(
     artifact_id: String,
     plan: Plan,
     data: DataFrame,
+    dataset_id: Option<String>,
 ) -> Result<(), JobError> {
     let started_at = job_now();
     let start = Instant::now();
@@ -156,6 +171,10 @@ pub(crate) async fn backtest(
     })
     .await?
     .map_err(JobError::value)?;
+    let report = crate::evaluate::Report {
+        dataset_id,
+        ..report
+    };
     let content = serde_json::to_value(&report).map_err(|e| JobError::runtime(e.to_string()))?;
     store_result(
         &state,
@@ -284,7 +303,7 @@ pub(crate) async fn hpo(
         serde_json::to_value(&report).map_err(|e| JobError::runtime(e.to_string()))?;
     if let Some(name) = create {
         let now = entity_now();
-        let best_id = ulid::Ulid::generate().to_string();
+        let best_id = chapkit_http::ids::new_id().to_string();
         state
             .store()
             .insert_config(chapkit_store::ConfigRow {
@@ -303,6 +322,108 @@ pub(crate) async fn hpo(
         &state,
         artifact_id,
         HPO_TYPE,
+        config_id,
+        started_at,
+        start,
+        content,
+    )
+    .await
+}
+
+/// Artifact `data.type` of forecast artifacts.
+pub const FORECAST_TYPE: &str = "ml_forecast";
+
+/// What a forecast runs with, checked before the job is submitted.
+pub(crate) struct ForecastPlan {
+    pub config_id: Option<String>,
+    pub config: Value,
+    pub periods: usize,
+    pub weather: String,
+}
+
+/// Resolve and check a `$forecast` request's config, horizon and weather.
+pub(crate) async fn forecast_plan(
+    state: &AppState,
+    config_id: Option<&str>,
+    config: Option<Value>,
+    periods: Option<usize>,
+    weather: Option<&str>,
+) -> Result<ForecastPlan, Problem> {
+    let (config_id, base) = request_config(state, config_id, config).await?;
+    let periods = periods.unwrap_or_else(|| {
+        base.as_ref()
+            .and_then(|c| c.get("prediction_periods"))
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_PREDICTION_PERIODS) as usize
+    });
+    let model = state.model().as_ref();
+    let info = model.info();
+    let n = u32::try_from(periods).unwrap_or(u32::MAX);
+    if n == 0 || n < info.min_prediction_periods || n > info.max_prediction_periods {
+        return Err(Problem::bad_request(format!(
+            "periods {periods} is outside the model's bounds [{}, {}]",
+            info.min_prediction_periods.max(1),
+            info.max_prediction_periods
+        )));
+    }
+    let weather = weather.map_or_else(|| "climatology".into(), weather_id);
+    match chapkit_eval::weather_provider(&weather) {
+        None => {
+            return Err(Problem::bad_request(format!(
+                "unknown weather provider {weather}"
+            )));
+        }
+        Some(p) if p.leaks_future_data() => {
+            return Err(Problem::bad_request(format!(
+                "weather provider {weather} reads the observed future and cannot forecast ahead"
+            )));
+        }
+        Some(_) => {}
+    }
+    let config = backtest_config(model, base, periods).map_err(Problem::bad_request)?;
+    Ok(ForecastPlan {
+        config_id,
+        config,
+        periods,
+        weather,
+    })
+}
+
+/// Run a forecast job: train on the whole dataset, forecast past its end, store the result.
+pub(crate) async fn forecast(
+    state: AppState,
+    artifact_id: String,
+    plan: ForecastPlan,
+    data: DataFrame,
+    dataset_id: Option<String>,
+) -> Result<(), JobError> {
+    let started_at = job_now();
+    let start = Instant::now();
+    let model = state.model().clone();
+    let ForecastPlan {
+        config_id,
+        config,
+        periods,
+        weather,
+    } = plan;
+    let (cfg, w) = (config.clone(), weather.clone());
+    let ahead = chapkit_http::jobs::blocking(move || {
+        crate::evaluate::forecast(model.as_ref(), &cfg, &data, periods, &w)
+    })
+    .await?
+    .map_err(JobError::value)?;
+    let content = json!({
+        "dataset_id": dataset_id,
+        "config": config,
+        "periods": periods,
+        "weather": weather,
+        "forecasts": ahead.forecasts,
+        "frame": ahead.frame,
+    });
+    store_result(
+        &state,
+        artifact_id,
+        FORECAST_TYPE,
         config_id,
         started_at,
         start,

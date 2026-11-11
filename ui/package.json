@@ -11,8 +11,8 @@
         "test": "bun test src"
     },
     "dependencies": {
-        "@winterop-com/sokkel-ui": "0.15.7",
-        "@winterop-com/sokkel-ui-charts": "0.15.7",
+        "@winterop-com/sokkel-ui": "0.15.11",
+        "@winterop-com/sokkel-ui-charts": "0.15.11",
         "ajv": "^8.20.0",
         "ajv-formats": "^3.0.1",
         "lucide-react": "^1.68.0",

@@ -108,8 +108,13 @@ pub trait Store: Send + Sync + 'static {
     async fn insert_config(&self, row: ConfigRow) -> StoreResult<()>;
     /// One config.
     async fn get_config(&self, id: &str) -> StoreResult<Option<ConfigRow>>;
-    /// Configs ordered by id (creation order), optionally paged, with the total count.
-    async fn list_configs(&self, page: Option<Page>) -> StoreResult<(Vec<ConfigRow>, u64)>;
+    /// Configs ordered by id (creation order), optionally only those whose name holds `name`
+    /// (ignoring the case of ASCII letters), optionally paged, with the count of those kept.
+    async fn list_configs(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ConfigRow>, u64)>;
     /// Replace name, data and tags; returns the updated row, `None` if missing.
     async fn update_config(&self, row: ConfigRow) -> StoreResult<Option<ConfigRow>>;
     /// Delete a config and every artifact tree linked to it. `false` if missing.
@@ -123,10 +128,12 @@ pub trait Store: Send + Sync + 'static {
     async fn artifact_content(&self, id: &str) -> StoreResult<Option<Vec<u8>>>;
     /// Artifacts ordered by id, optionally paged, with the total count.
     async fn list_artifacts(&self, page: Option<Page>) -> StoreResult<(Vec<ArtifactRow>, u64)>;
-    /// Artifacts whose `data.type` is `kind`, ordered by id, optionally paged, with their count.
+    /// Artifacts whose `data.type` is `kind`, ordered by id, optionally only those whose
+    /// `data.content.dataset_id` is one of `datasets`, optionally paged, with their count.
     async fn list_artifacts_of_type(
         &self,
         kind: &str,
+        datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)>;
     /// Replace data and tags; `None` if missing.
@@ -157,10 +164,43 @@ pub trait Store: Send + Sync + 'static {
     async fn get_dataset(&self, id: &str) -> StoreResult<Option<DatasetRow>>;
     /// A dataset's data.
     async fn dataset_data(&self, id: &str) -> StoreResult<Option<Vec<u8>>>;
-    /// Datasets ordered by id, optionally paged, with the total count.
-    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)>;
+    /// Datasets ordered by id, optionally only those whose name holds `name` (ignoring
+    /// the case of ASCII letters), optionally paged, with the count of those kept.
+    async fn list_datasets(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<DatasetRow>, u64)>;
     /// Delete a dataset. `false` if missing.
     async fn delete_dataset(&self, id: &str) -> StoreResult<bool>;
+}
+
+/// The `WHERE` clause (with a leading space, or empty) and its parameters, numbered from `?1`,
+/// that keep the rows whose `name` holds `name`, ignoring the case of ASCII letters as SQLite's
+/// `lower` does. Shared by the backends so they filter alike.
+pub(crate) fn name_filter(name: Option<&str>) -> (String, Vec<String>) {
+    match name {
+        Some(name) => (
+            " WHERE instr(lower(name), ?1) > 0".into(),
+            vec![name.to_ascii_lowercase()],
+        ),
+        None => (String::new(), Vec::new()),
+    }
+}
+
+/// The `WHERE` clause and its parameters for artifacts of a type, and with `datasets` only
+/// those made from one of them (`data.content.dataset_id`). `datasets` must not be empty.
+pub(crate) fn type_filter(kind: &str, datasets: Option<&[String]>) -> (String, Vec<String>) {
+    let mut sql = " WHERE json_extract(data, '$.type') = ?1".to_owned();
+    let mut params = vec![kind.to_owned()];
+    if let Some(ids) = datasets {
+        let marks: Vec<String> = (2..ids.len() + 2).map(|i| format!("?{i}")).collect();
+        sql.push_str(" AND json_extract(data, '$.content.dataset_id') IN (");
+        sql.push_str(&marks.join(", "));
+        sql.push(')');
+        params.extend(ids.iter().cloned());
+    }
+    (sql, params)
 }
 
 /// Open a store from a database URL.

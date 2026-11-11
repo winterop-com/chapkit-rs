@@ -10,7 +10,7 @@ import { api } from '../api/client'
 import type { Job } from '../api/types'
 import { dateOf, took, when } from '../lib/format'
 import { useResource } from '../lib/resource'
-import { ReadProblem } from '../parts'
+import { ReadState } from '../parts'
 
 const LIVE = new Set(['pending', 'running', 'canceling'])
 
@@ -59,7 +59,7 @@ export function Jobs() {
                 }
             />
             {/* A failed refresh keeps the jobs read before in view, under what failed. */}
-            <ReadProblem what="the jobs" resource={jobs} />
+            <ReadState what="the jobs" resource={jobs} />
             {(jobs.error === undefined || jobs.data !== undefined) && (
                 <DataTable
                     columns={COLUMNS}

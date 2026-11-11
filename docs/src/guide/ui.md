@@ -33,12 +33,13 @@ it uses these chapkit-rs extensions:
 | endpoint | |
 |---|---|
 | `POST /api/v1/datasets` | Store a dataset: JSON `{name, data, target?}`, or a CSV or JSON `file` as `multipart/form-data` (with `name`, `target`) |
-| `GET /api/v1/datasets` | List datasets (paged with `page` and `size`, like configs) |
+| `GET /api/v1/datasets` | List datasets (paged with `page` and `size`, like configs); `q` keeps those whose name holds it |
 | `GET`, `DELETE /api/v1/datasets/{id}` | A dataset's description; delete it |
 | `GET /api/v1/datasets/{id}/$data` | The data as stored, chapkit DataFrame JSON; or a projection: `location` and `column` (repeatable) for some locations and columns, `before` and `last` for the last periods before one, `canonical=true` for the periods as chapkit writes them, in period order |
 | `POST /api/v1/ml/$backtest` | A backtest of `data` or a stored `dataset_id` |
 | `POST /api/v1/ml/$forecast` | A forecast past the end of the dataset |
-| `GET /api/v1/artifacts?type=ml_backtest&order=desc` | Artifacts of one `data.type`, newest first with `order=desc` (paged with `page` and `size`); backtests and forecasts carry `data.summary` in place of their content |
+| `GET /api/v1/artifacts?type=ml_backtest&order=desc` | Artifacts of one `data.type`, newest first with `order=desc` (paged with `page` and `size`); backtests and forecasts carry `data.summary` in place of their content; with `type`, `q` keeps those made from a dataset whose name holds it |
+| `GET /api/v1/configs?q=` | Configs whose name holds `q` (`q` is a chapkit-rs extension) |
 
 **Datasets** are stored as given, after a check: `time_period` in any form chap-core reads (`2024-01`,
 `2024W01`, chap-core's CSV week ranges `2024-01-01/2024-01-07`), a `location` on every row, no location
@@ -86,6 +87,28 @@ config's `prediction_periods`; `weather` is `climatology` (default) or `damped_p
 it answers 202 with a job and stores an `ml_forecast` artifact whose `data.content` is
 `{dataset_id, config, periods, weather, forecasts: [{location, time_period, median, q10, q25, q75, q90}],
 frame}`, `frame` being the model's prediction frame.
+
+## Search and shortcuts
+
+The search in the top bar finds datasets and configs by name, and evaluations and forecasts by the
+name of the dataset they were made from: a few of each, newest runs first, with how many match in
+all. It asks the service with `q` (case-insensitive for ASCII letters), so a large list is never
+downloaded. The command palette goes to every page, runs the actions (upload a dataset, new
+evaluation, forecast or config, set or change the API key, light, dark or system scheme, the
+shortcuts) and lists the same search's results under them.
+
+| keys | where | |
+|---|---|---|
+| ⌘K (Ctrl K off a Mac) | everywhere, in fields too | Open or close the command palette |
+| `/` | everywhere | Search datasets, runs and configs |
+| `?` | everywhere | Show the keyboard shortcuts |
+| `o` `d` `e` `f` `c` `j` `a` `s` | everywhere | Go to Overview, Datasets, Evaluate, Forecast, Configs, Jobs, Artifacts, System |
+| `u` | Datasets | Upload a dataset |
+| `n` | Configs | New config |
+| ⌘Enter (Ctrl Enter) | Evaluate, Forecast, in their fields too | Run the evaluation or forecast |
+
+Single keys are quiet while typing in a field and while a dialog or menu is open. None needs Alt, so
+they work on a Norwegian keyboard as on an American one.
 
 ## Screens
 

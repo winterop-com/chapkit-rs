@@ -94,7 +94,7 @@ export function DatasetPage({ id }: { id: string }) {
         )
 
     return (
-        <PageState loading={dataset.loading} error={dataset.error?.detail ?? dataset.error?.message} status={dataset.error?.status}>
+        <PageState loading={dataset.loading} error={dataset.error?.detail ?? dataset.error?.message} status={dataset.error?.status} onRetry={dataset.reload}>
             {meta && (
                 <div className="flex flex-col gap-6">
                     <PageHeader

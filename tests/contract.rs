@@ -2348,3 +2348,66 @@ async fn deleting_a_pending_predict_splits_job_cancels_it() {
         "the deleted job ran"
     );
 }
+
+/// `q` keeps the datasets and configs whose name holds it, and the backtests and forecasts made
+/// from such a dataset; blank keeps everything, and on artifacts it needs `type`.
+#[tokio::test]
+async fn lists_are_searched_by_name() {
+    let app = app().await;
+    let mut datasets = vec![];
+    for name in ["Laos monthly", "Vietnam", "laos weekly"] {
+        let body = json!({"name": name, "data": backtest_data()});
+        let (s, d, _) = call(&app, "POST", "/api/v1/datasets", Some(body)).await;
+        assert_eq!(s, StatusCode::CREATED, "{d}");
+        datasets.push(d["id"].clone());
+        let body = json!({"name": format!("{name} config"), "data": {}});
+        let (s, c, _) = call(&app, "POST", "/api/v1/configs", Some(body)).await;
+        assert_eq!(s, StatusCode::CREATED, "{c}");
+    }
+    for id in &datasets[..2] {
+        let body = json!({"dataset_id": id, "periods": 2, "splits": 2});
+        let (_, sub, _) = call(&app, "POST", "/api/v1/ml/$backtest", Some(body)).await;
+        assert_eq!(finished(&app, &sub).await["status"], "completed");
+    }
+    let names = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let (s, list, _) = call(&app, "GET", "/api/v1/datasets?q=LAOS", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(names(&list), ["Laos monthly", "laos weekly"]);
+    let (_, page, _) = call(&app, "GET", "/api/v1/datasets?q=laos&page=2&size=1", None).await;
+    assert_eq!(
+        (&page["total"], names(&page["items"])),
+        (&json!(2), vec!["laos weekly".into()])
+    );
+    let (_, list, _) = call(&app, "GET", "/api/v1/datasets?q=%20%20", None).await;
+    assert_eq!(list.as_array().unwrap().len(), 3);
+    let (_, list, _) = call(&app, "GET", "/api/v1/configs?q=viet", None).await;
+    assert_eq!(names(&list), ["Vietnam config"]);
+
+    let uri = "/api/v1/artifacts?type=ml_backtest&order=desc&q=laos&page=1&size=5";
+    let (s, page, _) = call(&app, "GET", uri, None).await;
+    assert_eq!(s, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 1);
+    assert_eq!(
+        page["items"][0]["data"]["summary"]["dataset_id"],
+        datasets[0]
+    );
+    let (_, page, _) = call(
+        &app,
+        "GET",
+        "/api/v1/artifacts?type=ml_backtest&q=nowhere&page=1&size=5",
+        None,
+    )
+    .await;
+    assert_eq!((&page["total"], &page["items"]), (&json!(0), &json!([])));
+    let (_, list, _) = call(&app, "GET", "/api/v1/artifacts?type=ml_backtest&q=", None).await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    let (s, problem, _) = call(&app, "GET", "/api/v1/artifacts?q=laos", None).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+}

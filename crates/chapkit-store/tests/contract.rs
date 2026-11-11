@@ -38,10 +38,13 @@ async fn configs_crud_and_conflict(s: Arc<dyn Store>) {
     ));
     s.insert_config(cfg("01B")).await.unwrap();
     let (rows, total) = s
-        .list_configs(Some(Page {
-            offset: 1,
-            limit: 10,
-        }))
+        .list_configs(
+            None,
+            Some(Page {
+                offset: 1,
+                limit: 10,
+            }),
+        )
         .await
         .unwrap();
     assert_eq!((rows.len(), total), (1, 2));
@@ -131,16 +134,19 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
     assert_eq!(s.dataset_data("D2").await.unwrap(), Some(vec![7; 3]));
     assert_eq!(s.dataset_data("D9").await.unwrap(), None);
     let (rows, total) = s
-        .list_datasets(Some(Page {
-            offset: 1,
-            limit: 5,
-        }))
+        .list_datasets(
+            None,
+            Some(Page {
+                offset: 1,
+                limit: 5,
+            }),
+        )
         .await
         .unwrap();
     assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "D2"));
     assert!(s.delete_dataset("D1").await.unwrap());
     assert!(!s.delete_dataset("D1").await.unwrap());
-    assert_eq!(s.list_datasets(None).await.unwrap().1, 1);
+    assert_eq!(s.list_datasets(None, None).await.unwrap().1, 1);
 
     for (id, kind) in [
         ("T1", "ml_backtest"),
@@ -151,7 +157,10 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
         a.data = json!({"type": kind});
         s.insert_artifact(a).await.unwrap();
     }
-    let (rows, total) = s.list_artifacts_of_type("ml_backtest", None).await.unwrap();
+    let (rows, total) = s
+        .list_artifacts_of_type("ml_backtest", None, None)
+        .await
+        .unwrap();
     assert_eq!(total, 2);
     assert_eq!(
         rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
@@ -160,6 +169,7 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
     let (rows, total) = s
         .list_artifacts_of_type(
             "ml_backtest",
+            None,
             Some(Page {
                 offset: 1,
                 limit: 1,
@@ -168,11 +178,76 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
         .await
         .unwrap();
     assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "T3"));
-    assert_eq!(s.list_artifacts_of_type("nope", None).await.unwrap().1, 0);
+    assert_eq!(
+        s.list_artifacts_of_type("nope", None, None)
+            .await
+            .unwrap()
+            .1,
+        0
+    );
+}
+
+async fn lists_filter_by_name_and_dataset(s: Arc<dyn Store>) {
+    for (id, name) in [
+        ("01A", "Laos monthly"),
+        ("01B", "Vietnam"),
+        ("01C", "laos weekly"),
+    ] {
+        let mut c = cfg(id);
+        c.name = name.into();
+        s.insert_config(c).await.unwrap();
+        let mut d = dataset(id);
+        d.name = name.into();
+        s.insert_dataset(d, vec![]).await.unwrap();
+    }
+    let names = |rows: Vec<String>| rows.join(",");
+    let (rows, total) = s.list_configs(Some("LAOS"), None).await.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(names(rows.into_iter().map(|r| r.id).collect()), "01A,01C");
+    let (rows, total) = s
+        .list_datasets(
+            Some("laos"),
+            Some(Page {
+                offset: 1,
+                limit: 5,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "01C"));
+    assert_eq!(s.list_datasets(Some("%"), None).await.unwrap().1, 0);
+    assert_eq!(s.list_datasets(Some(""), None).await.unwrap().1, 3);
+
+    for (id, kind, dataset) in [
+        ("T1", "ml_backtest", "01A"),
+        ("T2", "ml_backtest", "01B"),
+        ("T3", "ml_forecast", "01A"),
+        ("T4", "ml_backtest", "01C"),
+    ] {
+        let mut a = art(id, None);
+        a.data = json!({"type": kind, "content": {"dataset_id": dataset}});
+        s.insert_artifact(a).await.unwrap();
+    }
+    let ids = ["01A".to_owned(), "01C".to_owned()];
+    let (rows, total) = s
+        .list_artifacts_of_type("ml_backtest", Some(&ids), None)
+        .await
+        .unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(names(rows.into_iter().map(|r| r.id).collect()), "T1,T4");
+    let none: [String; 0] = [];
+    assert_eq!(
+        s.list_artifacts_of_type("ml_backtest", Some(&none), None)
+            .await
+            .unwrap()
+            .1,
+        0
+    );
 }
 
 async fn suite(s: impl Fn() -> Arc<dyn Store>) {
     configs_crud_and_conflict(s()).await;
+    lists_filter_by_name_and_dataset(s()).await;
     artifact_tree_links_and_cascade(s()).await;
     datasets_crud_and_artifact_types(s()).await;
 }

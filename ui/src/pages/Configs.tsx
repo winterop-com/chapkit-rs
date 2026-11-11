@@ -1,5 +1,8 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { DescriptionList } from '@winterop-com/sokkel-ui/DescriptionList'
+import { useCommands } from '@winterop-com/sokkel-ui/hooks/use-commands'
+import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
+import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
 import { ConfirmDialog, DialogShell } from '@winterop-com/sokkel-ui/DialogShell'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
@@ -12,9 +15,11 @@ import { useState } from 'react'
 
 import { api, asApiError } from '../api/client'
 import type { Config } from '../api/types'
+import { ACTIONS, NEW_CONFIG } from '../lib/commands'
 import { dateOf, when } from '../lib/format'
+import { go, hashParam } from '../lib/router'
 import { useResource } from '../lib/resource'
-import { ReadProblem } from '../parts'
+import { ReadState } from '../parts'
 
 const said = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value))
 
@@ -75,10 +80,17 @@ function NewConfig({ schema, onClose, onSaved }: { schema: Record<string, unknow
 }
 
 /** Configs: the named option sets, made from the model's schema. */
-export function Configs() {
+export function Configs({ opened }: { opened?: string }) {
     const configs = useResource(api.configs, [])
     const schema = useResource(api.configSchema, [])
-    const [creating, setCreating] = useState(false)
+    // `#/configs?new` (the palette's New config from another page) opens the form.
+    const [creating, setCreating] = useState(() => hashParam('new') !== undefined)
+    const stopCreating = () => {
+        setCreating(false)
+        if (hashParam('new') !== undefined) go('/configs')
+    }
+    useShortcuts([{ id: NEW_CONFIG, key: 'n', label: 'New config', group: 'Configs', run: () => setCreating(true) }], [])
+    useCommands([{ title: ACTIONS, rank: 10, commands: [{ id: NEW_CONFIG, label: 'New config', icon: Plus, keys: keyLabels({ key: 'n' }), onSelect: () => setCreating(true) }] }], [])
     const [removing, setRemoving] = useState<Config | null>(null)
     const remove = (config: Config) =>
         api.deleteConfig(config.id).then(
@@ -107,14 +119,15 @@ export function Configs() {
                     </Button>
                 }
             />
-            <ReadProblem what="the model's options" resource={schema} tone="warning" />
-            {configs.error ? <ReadProblem what="the configs" resource={configs} /> : <DataTable
+            <ReadState what="the model's options" resource={schema} />
+            {configs.error ? <ReadState what="the configs" resource={configs} /> : <DataTable
                 columns={COLUMNS}
                 rows={configs.data ?? []}
                 rowKey={(row) => row.id}
                 loading={configs.loading}
                 defaultSort={{ column: 'created', direction: 'desc' }}
                 minWidth="40rem"
+                defaultExpanded={opened === undefined ? undefined : new Set([opened])}
                 detail={(row) => (
                     <DescriptionList
                         termWidth="14rem"
@@ -130,9 +143,9 @@ export function Configs() {
             {creating && schema.data && (
                 <NewConfig
                     schema={schema.data}
-                    onClose={() => setCreating(false)}
+                    onClose={stopCreating}
                     onSaved={() => {
-                        setCreating(false)
+                        stopCreating()
                         configs.reload()
                     }}
                 />

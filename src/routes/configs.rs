@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chapkit_http::time::entity_now;
-use chapkit_http::{ApiResult, Json, ListOrPage, PageParams, Problem, Query, Stats, parse_ulid};
+use chapkit_http::{ApiResult, Json, ListOrPage, Problem, Query, Stats, parse_ulid};
 use chapkit_store::{ConfigRow, Page};
 use serde_json::Value;
 use utoipa_axum::router::OpenApiRouter;
@@ -32,19 +32,24 @@ fn normalized(state: &AppState, body: &ConfigIn) -> ApiResult<Value> {
         })
 }
 
-/// List configs (paged when both `page` and `size` are given).
-#[utoipa::path(get, path = "", tag = "Config", params(PageParams),
+/// List configs (paged when both `page` and `size` are given), only those whose name holds `q`
+/// when given.
+#[utoipa::path(get, path = "", tag = "Config", params(super::NamedListParams),
     responses((status = OK, body = ListOrPage<ConfigOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
 async fn list(
     State(s): State<AppState>,
-    Query(p): Query<PageParams>,
+    Query(p): Query<super::NamedListParams>,
 ) -> ApiResult<ListOrPage<ConfigOut>> {
-    let paging = p.resolve()?;
+    let paging = p.paging()?;
     let page = paging.map(|(page, size)| Page {
         offset: chapkit_http::extract::page_offset(page, size),
         limit: size,
     });
-    let (rows, total) = s.store().list_configs(page).await.map_err(store_problem)?;
+    let (rows, total) = s
+        .store()
+        .list_configs(p.name(), page)
+        .await
+        .map_err(store_problem)?;
     let items: Vec<ConfigOut> = rows.into_iter().map(Into::into).collect();
     Ok(ListOrPage::new(items, total, paging))
 }
@@ -156,10 +161,13 @@ async fn schema(State(s): State<AppState>) -> axum::Json<Value> {
 async fn stats(State(s): State<AppState>) -> ApiResult<axum::Json<Stats>> {
     let (_, total) = s
         .store()
-        .list_configs(Some(Page {
-            offset: 0,
-            limit: 0,
-        }))
+        .list_configs(
+            None,
+            Some(Page {
+                offset: 0,
+                limit: 0,
+            }),
+        )
         .await
         .map_err(store_problem)?;
     Ok(axum::Json(Stats { total }))

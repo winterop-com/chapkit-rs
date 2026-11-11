@@ -173,6 +173,8 @@ export const api = {
     },
 
     configs: async (signal?: Signal) => items(await request<Config[] | { items: Config[] }>(`${BASE}/configs`, { signal })),
+    /** A page of the configs whose name holds `q`. */
+    findConfigs: (q: string, size: number, signal?: Signal) => request<Page<Config>>(`${BASE}/configs${query({ q, page: 1, size })}`, { signal }),
     configSchema: (signal?: Signal) => request<Record<string, unknown>>(`${BASE}/configs/$schema`, { signal }),
     createConfig: (name: string, data: unknown) => request<Config>(`${BASE}/configs`, json('POST', { name, data })),
     deleteConfig: (id: string) => request<void>(`${BASE}/configs/${id}`, { method: 'DELETE' }),
@@ -183,11 +185,14 @@ export const api = {
     /** The artifacts, of one type when given; a list carries no content, which `artifact` reads. */
     artifacts: async (type?: string, signal?: Signal) =>
         items(await request<Artifact[] | { items: Artifact[] }>(`${BASE}/artifacts${query({ type })}`, { signal })),
-    /** A page of the newest artifacts of a type, each with its summary in place of its content. */
-    results: <S>(type: string, page: number, size: number, signal?: Signal) =>
-        request<Page<Artifact<never, S>>>(`${BASE}/artifacts${query({ type, order: 'desc', page, size })}`, { signal }),
-    evaluations: (page: number, size: number, signal?: Signal) => api.results<EvaluationSummary>('ml_backtest', page, size, signal),
-    forecasts: (page: number, size: number, signal?: Signal) => api.results<ForecastSummary>('ml_forecast', page, size, signal),
+    /**
+     * A page of the newest artifacts of a type, each with its summary in place of its content; with
+     * `q`, only those made from a dataset whose name holds it.
+     */
+    results: <S>(type: string, page: number, size: number, signal?: Signal, q?: string) =>
+        request<Page<Artifact<never, S>>>(`${BASE}/artifacts${query({ type, order: 'desc', page, size, q })}`, { signal }),
+    evaluations: (page: number, size: number, signal?: Signal, q?: string) => api.results<EvaluationSummary>('ml_backtest', page, size, signal, q),
+    forecasts: (page: number, size: number, signal?: Signal, q?: string) => api.results<ForecastSummary>('ml_forecast', page, size, signal, q),
     artifact: <C = unknown>(id: string, signal?: Signal) => request<Artifact<C>>(`${BASE}/artifacts/${id}`, { signal }),
     artifactTree: (id: string, signal?: Signal) => request<ArtifactNode>(`${BASE}/artifacts/${id}/$tree`, { signal }),
     /** Downloads an artifact's content as a file, sent with the key like every other request. */
@@ -199,6 +204,8 @@ export const api = {
     deleteArtifact: (id: string) => request<void>(`${BASE}/artifacts/${id}`, { method: 'DELETE' }),
 
     datasets: async (signal?: Signal) => items(await request<Dataset[] | { items: Dataset[] }>(`${BASE}/datasets`, { signal })),
+    /** A page of the datasets whose name holds `q`. */
+    findDatasets: (q: string, size: number, signal?: Signal) => request<Page<Dataset>>(`${BASE}/datasets${query({ q, page: 1, size })}`, { signal }),
     dataset: (id: string, signal?: Signal) => request<Dataset>(`${BASE}/datasets/${id}`, { signal }),
     /** A stored dataset's rows, its periods as chapkit writes them and in period order. */
     datasetData: (id: string, what: DataProjection = {}, signal?: Signal) =>

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::Value;
 
 use crate::{
@@ -240,17 +240,28 @@ impl Store for SqliteStore {
         self.with(move |c| get_config_sync(c, &id)).await
     }
 
-    async fn list_configs(&self, page: Option<Page>) -> StoreResult<(Vec<ConfigRow>, u64)> {
+    async fn list_configs(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ConfigRow>, u64)> {
+        let (filter, args) = crate::name_filter(name);
         self.with(move |c| {
             let total: i64 = c
-                .query_row("SELECT COUNT(*) FROM configs", [], |r| r.get(0))
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM configs{filter}"),
+                    params_from_iter(&args),
+                    |r| r.get(0),
+                )
                 .map_err(|e| db(&e))?;
             let sql = format!(
-                "SELECT id, name, data, tags, created_at, updated_at FROM configs ORDER BY id{}",
+                "SELECT id, name, data, tags, created_at, updated_at FROM configs{filter} ORDER BY id{}",
                 page_sql(page)
             );
             let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
-            let rows = stmt.query_map([], config_row).map_err(|e| db(&e))?;
+            let rows = stmt
+                .query_map(params_from_iter(&args), config_row)
+                .map_err(|e| db(&e))?;
             let rows = rows
                 .map(|r| r.map_err(|e| db(&e)).and_then(parse_config))
                 .collect::<StoreResult<Vec<_>>>()?;
@@ -363,24 +374,29 @@ impl Store for SqliteStore {
     async fn list_artifacts_of_type(
         &self,
         kind: &str,
+        datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
-        let kind = kind.to_owned();
+        if datasets.is_some_and(<[String]>::is_empty) {
+            return Ok((Vec::new(), 0));
+        }
+        let (filter, args) = crate::type_filter(kind, datasets);
         self.with(move |c| {
-            const WHERE: &str = "WHERE json_extract(data, '$.type') = ?1";
             let total: i64 = c
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM artifacts {WHERE}"),
-                    [&kind],
+                    &format!("SELECT COUNT(*) FROM artifacts{filter}"),
+                    params_from_iter(&args),
                     |r| r.get(0),
                 )
                 .map_err(|e| db(&e))?;
             let sql = format!(
-                "SELECT {ARTIFACT_COLS} FROM artifacts {WHERE} ORDER BY id{}",
+                "SELECT {ARTIFACT_COLS} FROM artifacts{filter} ORDER BY id{}",
                 page_sql(page)
             );
             let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
-            let rows = stmt.query_map([&kind], artifact_row).map_err(|e| db(&e))?;
+            let rows = stmt
+                .query_map(params_from_iter(&args), artifact_row)
+                .map_err(|e| db(&e))?;
             let rows = rows
                 .map(|r| r.map_err(|e| db(&e)).and_then(parse_artifact))
                 .collect::<StoreResult<Vec<_>>>()?;
@@ -558,17 +574,28 @@ impl Store for SqliteStore {
         .await
     }
 
-    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)> {
+    async fn list_datasets(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<DatasetRow>, u64)> {
+        let (filter, args) = crate::name_filter(name);
         self.with(move |c| {
             let total: i64 = c
-                .query_row("SELECT COUNT(*) FROM datasets", [], |r| r.get(0))
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM datasets{filter}"),
+                    params_from_iter(&args),
+                    |r| r.get(0),
+                )
                 .map_err(|e| db(&e))?;
             let sql = format!(
-                "SELECT {DATASET_COLS} FROM datasets ORDER BY id{}",
+                "SELECT {DATASET_COLS} FROM datasets{filter} ORDER BY id{}",
                 page_sql(page)
             );
             let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
-            let rows = stmt.query_map([], dataset_row).map_err(|e| db(&e))?;
+            let rows = stmt
+                .query_map(params_from_iter(&args), dataset_row)
+                .map_err(|e| db(&e))?;
             let rows = rows
                 .map(|r| r.map_err(|e| db(&e)).and_then(parse_dataset))
                 .collect::<StoreResult<Vec<_>>>()?;

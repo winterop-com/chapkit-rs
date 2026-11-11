@@ -17,7 +17,7 @@ import type { Artifact } from '../api/types'
 import { bytes, dateOf, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
-import { ReadProblem } from '../parts'
+import { ReadState } from '../parts'
 
 const TYPE_WORDS: Record<string, string> = {
     ml_backtest: 'Evaluation',
@@ -68,7 +68,7 @@ function ArtifactView({ id }: { id: string }) {
     const artifact = useResource((signal) => api.artifact(id, signal), [id])
     const data = artifact.data
     return (
-        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status}>
+        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload}>
             {data && (
                 <Stack gap="section">
                     <PageHeader
@@ -135,7 +135,7 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
     return (
         <>
             <PageHeader title="Artifacts" count={artifacts.data?.length} description="What the service stored: evaluations, forecasts, trained models and predictions." />
-            {artifacts.error ? <ReadProblem what="the artifacts" resource={artifacts} /> : <DataTable
+            {artifacts.error ? <ReadState what="the artifacts" resource={artifacts} /> : <DataTable
                 columns={COLUMNS}
                 rows={roots}
                 rowKey={(row) => row.id}

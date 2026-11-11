@@ -66,6 +66,10 @@ struct ListParams {
     kind: Option<String>,
     /// `asc` (oldest first, the default) or `desc` (newest first). chapkit-rs extension.
     order: Option<String>,
+    /// With `type`, only artifacts made from a stored dataset whose name holds this text,
+    /// ignoring the case of ASCII letters (`data.content.dataset_id`, as backtests and forecasts
+    /// carry it). chapkit-rs extension.
+    q: Option<String>,
 }
 
 /// A small summary of a backtest's or forecast's content, for listing them without it:
@@ -117,6 +121,7 @@ fn listed(row: chapkit_store::ArtifactRow) -> ArtifactOut {
 
 /// List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest
 /// first. Backtests and forecasts carry `data.summary`, enough to list them without their content.
+/// With `type`, `q` keeps those made from a dataset whose name holds it.
 #[utoipa::path(get, path = "", tag = "Artifacts", params(ListParams),
     responses((status = OK, body = ListOrPage<ArtifactOut>), (status = UNPROCESSABLE_ENTITY, body = Problem)))]
 async fn list(
@@ -139,12 +144,36 @@ async fn list(
             })]));
         }
     };
+    // `q` names datasets: the artifacts kept are those made from one of them.
+    let datasets = match (super::search_text(p.q.as_deref()), &p.kind) {
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(Problem::validation(vec![serde_json::json!({
+                "loc": ["query", "q"],
+                "msg": "q needs type",
+                "type": "value_error"
+            })]));
+        }
+        (Some(q), Some(_)) => {
+            let (rows, _) = s
+                .store()
+                .list_datasets(Some(q), None)
+                .await
+                .map_err(store_problem)?;
+            Some(rows.into_iter().map(|d| d.id).collect::<Vec<_>>())
+        }
+    };
     let read = |page: Option<Page>| {
         let store = s.store();
         let kind = p.kind.clone();
+        let datasets = datasets.clone();
         async move {
             match kind.as_deref() {
-                Some(kind) => store.list_artifacts_of_type(kind, page).await,
+                Some(kind) => {
+                    store
+                        .list_artifacts_of_type(kind, datasets.as_deref(), page)
+                        .await
+                }
                 None => store.list_artifacts(page).await,
             }
             .map_err(store_problem)

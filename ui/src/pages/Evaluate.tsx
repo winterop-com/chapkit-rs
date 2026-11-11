@@ -4,6 +4,7 @@ import { ScoreTable } from '@winterop-com/sokkel-ui/dashboard/ScoreTable'
 import { StatPanel } from '@winterop-com/sokkel-ui/dashboard/StatPanel'
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { DescriptionList } from '@winterop-com/sokkel-ui/DescriptionList'
+import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
 import { Stack } from '@winterop-com/sokkel-ui/Layout'
 import { NumberField } from '@winterop-com/sokkel-ui/NumberField'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
@@ -28,7 +29,7 @@ import {
     HistoryNote,
     JobProgress,
     LocationPicker,
-    ReadProblem,
+    ReadState,
     SelectField,
     useHistory,
     useJobRun,
@@ -51,7 +52,7 @@ function NewEvaluation({ onDone }: { onDone: (artifactId: string) => void }) {
     const [splits, setSplits] = useState<number | null>(7)
     const [stride, setStride] = useState<number | null>(1)
     const [weather, setWeather] = useState('climatology')
-    const run = useJobRun('evaluation')
+    const run = useJobRun()
     useEffect(() => {
         const first = datasets.data?.[0]
         if (dataset === '' && first !== undefined) setDataset(first.id)
@@ -68,12 +69,17 @@ function NewEvaluation({ onDone }: { onDone: (artifactId: string) => void }) {
                 weather,
             }),
         )
+    // From the form's fields too: the settings typed, then run.
+    useShortcuts(
+        [{ id: 'run-evaluation', key: 'Enter', mod: true, inFields: true, label: 'Run the evaluation', group: 'Evaluate', disabled: dataset === '', run: start }],
+        [dataset, config, periods, splits, stride, weather, run.busy],
+    )
     const noData = datasets.data !== undefined && datasets.data.length === 0
     return (
         <Section title="New evaluation" description="Backtest the model on a dataset: train on the past, forecast the next periods, and score against what happened, split after split.">
             <Stack gap="lg">
-                <ReadProblem what="the datasets" resource={datasets} />
-                <ReadProblem what="the configs" resource={configs} tone="warning" />
+                <ReadState what="the datasets" resource={datasets} />
+                <ReadState what="the configs" resource={configs} />
                 {noData ? (
                     <Problem
                         tone="warning"
@@ -96,7 +102,7 @@ function NewEvaluation({ onDone }: { onDone: (artifactId: string) => void }) {
                     </div>
                 )}
                 <div className="flex items-center gap-3">
-                    <Button onClick={start} disabled={dataset === ''} reason={run.reason}>
+                    <Button onClick={start} disabled={dataset === ''} busy={run.busy}>
                         <Play aria-hidden />
                         Run evaluation
                     </Button>
@@ -228,7 +234,7 @@ function EvaluationView({ id }: { id: string }) {
     ]
 
     return (
-        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status}>
+        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload}>
             {result && artifact.data && (
                 <Stack gap="section">
                     <PageHeader
@@ -402,7 +408,7 @@ function PastEvaluations() {
     return (
         <Section title="Past evaluations" meta={history.data ? `${history.data.total}` : undefined} flush>
             {history.error ? (
-                <ReadProblem what="the past evaluations" resource={history} />
+                <ReadState what="the past evaluations" resource={history} />
             ) : (
                 <DataTable
                     columns={pastColumns(names)}

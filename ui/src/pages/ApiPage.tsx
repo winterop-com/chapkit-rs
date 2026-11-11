@@ -7,7 +7,7 @@ import { useMemo } from 'react'
 
 import { api } from '../api/client'
 import { useResource } from '../lib/resource'
-import { ReadProblem } from '../parts'
+import { ReadState } from '../parts'
 
 interface Route {
     key: string
@@ -68,7 +68,7 @@ export function ApiPage() {
                 }
             />
             {spec.error ? (
-                <ReadProblem what="the OpenAPI document" resource={spec} />
+                <ReadState what="the OpenAPI document" resource={spec} />
             ) : (
                 <DataTable
                     columns={COLUMNS}

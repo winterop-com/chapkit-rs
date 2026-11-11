@@ -10,7 +10,7 @@
         "tags": [
           "Artifacts"
         ],
-        "summary": "List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest\nfirst. Backtests and forecasts carry `data.summary`, enough to list them without their content.",
+        "summary": "List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest\nfirst. Backtests and forecasts carry `data.summary`, enough to list them without their content.\nWith `type`, `q` keeps those made from a dataset whose name holds it.",
         "operationId": "list",
         "parameters": [
           {
@@ -55,6 +55,18 @@
             "name": "order",
             "in": "query",
             "description": "`asc` (oldest first, the default) or `desc` (newest first). chapkit-rs extension.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "With `type`, only artifacts made from a stored dataset whose name holds this text,\nignoring the case of ASCII letters (`data.content.dataset_id`, as backtests and forecasts\ncarry it). chapkit-rs extension.",
             "required": false,
             "schema": {
               "type": [
@@ -483,7 +495,7 @@
         "tags": [
           "Config"
         ],
-        "summary": "List configs (paged when both `page` and `size` are given).",
+        "summary": "List configs (paged when both `page` and `size` are given), only those whose name holds `q`\nwhen given.",
         "operationId": "list",
         "parameters": [
           {
@@ -510,6 +522,18 @@
                 "null"
               ],
               "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Only those whose name holds this text, ignoring the case of ASCII letters. chapkit-rs\nextension.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -883,7 +907,7 @@
         "tags": [
           "Datasets"
         ],
-        "summary": "List datasets (paged when both `page` and `size` are given).",
+        "summary": "List datasets (paged when both `page` and `size` are given), only those whose name holds `q`\nwhen given.",
         "operationId": "list",
         "parameters": [
           {
@@ -910,6 +934,18 @@
                 "null"
               ],
               "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Only those whose name holds this text, ignoring the case of ASCII letters. chapkit-rs\nextension.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],

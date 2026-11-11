@@ -1,7 +1,10 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { ConfirmDialog, DialogShell } from '@winterop-com/sokkel-ui/DialogShell'
-import { checkFiles, FileField, type RefusalReason } from '@winterop-com/sokkel-ui/FileField'
+import { FileField, type CheckedRefusal } from '@winterop-com/sokkel-ui/FileField'
+import { useCommands } from '@winterop-com/sokkel-ui/hooks/use-commands'
+import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
 import { Stack } from '@winterop-com/sokkel-ui/Layout'
+import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { TextField } from '@winterop-com/sokkel-ui/TextField'
@@ -15,25 +18,26 @@ import { useState } from 'react'
 import { api, asApiError } from '../api/client'
 import type { Dataset } from '../api/types'
 import { useModel } from '../App'
+import { ACTIONS, UPLOAD_DATASET } from '../lib/commands'
 import { count, dateOf, periodWord, when } from '../lib/format'
 import { useResource } from '../lib/resource'
-import { go } from '../lib/router'
-import { ReadProblem } from '../parts'
+import { go, hashParam } from '../lib/router'
+import { ReadState } from '../parts'
 
 /** The files a dataset is read from. */
 const ACCEPT = ['.csv', '.json']
 
-/** Files offered for an upload, sorted by the field's own rules into the one taken and those refused. */
+/** Files offered for an upload, sorted by the field's limits into the one taken and those refused. */
 interface Offered {
     taken: File[]
-    refused: { file: File; reason: RefusalReason }[]
+    refused: CheckedRefusal[]
 }
+
+/** An upload with no file chosen yet. */
+const NOTHING: Offered = { taken: [], refused: [] }
 
 /** The service's upload limit, when it says it. */
 const useUploadLimit = () => useModel()?.max_body_bytes
-
-/** Files dropped on the page, held to the same limits as the field's picker. */
-const offer = (files: readonly File[], maxSize: number | undefined): Offered => checkFiles(files, { accept: ACCEPT, maxSize, maxFiles: 1 })
 
 const COLUMNS: DataColumn<Dataset>[] = [
     { id: 'name', header: 'Name', width: 'minmax(12rem,2fr)', cell: (row) => <span className="font-medium">{row.name}</span>, sortValue: (row) => row.name },
@@ -77,6 +81,7 @@ export function UploadDialog({
 }) {
     const maxSize = useUploadLimit()
     const [files, setFiles] = useState<File[]>(initial.taken)
+    const [refused, setRefused] = useState<CheckedRefusal[]>(initial.refused)
     const [name, setName] = useState(initial.taken[0] ? baseName(initial.taken[0]) : '')
     const [target, setTarget] = useState('disease_cases')
     const [busy, setBusy] = useState(false)
@@ -119,7 +124,8 @@ export function UploadDialog({
                     maxSize={maxSize}
                     maxFiles={1}
                     previews={false}
-                    defaultRefused={initial.refused}
+                    refused={refused}
+                    onRefusedChange={setRefused}
                     value={files}
                     onChange={(next) => {
                         setFiles(next)
@@ -147,7 +153,17 @@ export function UploadDialog({
 export function Datasets() {
     const datasets = useResource(api.datasets, [])
     const maxSize = useUploadLimit()
-    const [upload, setUpload] = useState<Offered | null>(null)
+    // `#/datasets?upload` (the palette's Upload a dataset from another page) opens the upload.
+    const [upload, setUpload] = useState<Offered | null>(() => (hashParam('upload') === undefined ? null : NOTHING))
+    const closeUpload = () => {
+        setUpload(null)
+        if (hashParam('upload') !== undefined) go('/datasets')
+    }
+    useShortcuts([{ id: UPLOAD_DATASET, key: 'u', label: 'Upload a dataset', group: 'Datasets', run: () => setUpload(NOTHING) }], [])
+    useCommands(
+        [{ title: ACTIONS, rank: 10, commands: [{ id: UPLOAD_DATASET, label: 'Upload a dataset', icon: Upload, keys: keyLabels({ key: 'u' }), onSelect: () => setUpload(NOTHING) }] }],
+        [],
+    )
     const [removing, setRemoving] = useState<Dataset | null>(null)
     const rows = datasets.data ?? []
 
@@ -162,21 +178,26 @@ export function Datasets() {
         )
 
     return (
-        <DropZone onFiles={(files) => setUpload(offer(files, maxSize))} words={{ title: 'Drop to upload', detail: 'A CSV or JSON dataset' }}>
+        <DropZone
+            accept={ACCEPT}
+            maxSize={maxSize}
+            maxFiles={1}
+            onFiles={(taken, refused) => setUpload({ taken, refused })}
+            words={{ title: 'Drop to upload', detail: 'A CSV or JSON dataset' }}>
             <Stack gap="section">
             <PageHeader
                 title="Datasets"
                 count={datasets.data ? rows.length : undefined}
                 description="Data to evaluate the model on and to forecast from. Drop a CSV or JSON file anywhere here to upload it."
                 actions={
-                    <Button size="sm" onClick={() => setUpload({ taken: [], refused: [] })}>
+                    <Button size="sm" onClick={() => setUpload(NOTHING)}>
                         <Upload aria-hidden />
                         Upload
                     </Button>
                 }
             />
             {datasets.error ? (
-                <ReadProblem what="the datasets" resource={datasets} />
+                <ReadState what="the datasets" resource={datasets} />
             ) : (
                 <DataTable
                     columns={COLUMNS}
@@ -201,7 +222,7 @@ export function Datasets() {
                                 <EmptyDescription>Upload a CSV or JSON file, or drop one on this page.</EmptyDescription>
                             </EmptyHeader>
                             <EmptyContent>
-                                <Button size="sm" variant="outline" onClick={() => setUpload({ taken: [], refused: [] })}>
+                                <Button size="sm" variant="outline" onClick={() => setUpload(NOTHING)}>
                                     Upload a dataset
                                 </Button>
                             </EmptyContent>
@@ -214,7 +235,7 @@ export function Datasets() {
                 <UploadDialog
                     open
                     initial={upload}
-                    onOpenChange={(open) => !open && setUpload(null)}
+                    onOpenChange={(open) => !open && closeUpload()}
                     onUploaded={(dataset) => {
                         setUpload(null)
                         datasets.reload()

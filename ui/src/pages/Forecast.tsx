@@ -1,5 +1,6 @@
 import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { DescriptionList } from '@winterop-com/sokkel-ui/DescriptionList'
+import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
 import { Stack } from '@winterop-com/sokkel-ui/Layout'
 import { NumberField } from '@winterop-com/sokkel-ui/NumberField'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
@@ -23,7 +24,7 @@ import {
     HistoryNote,
     JobProgress,
     LocationPicker,
-    ReadProblem,
+    ReadState,
     SelectField,
     useHistory,
     useJobRun,
@@ -40,7 +41,7 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
     const [config, setConfig] = useState('')
     const [periods, setPeriods] = useState<number | null>(3)
     const [weather, setWeather] = useState('climatology')
-    const run = useJobRun('forecast')
+    const run = useJobRun()
     useEffect(() => {
         const first = datasets.data?.[0]
         if (dataset === '' && first !== undefined) setDataset(first.id)
@@ -49,12 +50,17 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
         run.start(() =>
             api.forecast({ dataset_id: dataset, ...(config === '' ? {} : { config_id: config }), ...(periods === null ? {} : { periods }), weather }),
         )
+    // From the form's fields too: the settings typed, then run.
+    useShortcuts(
+        [{ id: 'run-forecast', key: 'Enter', mod: true, inFields: true, label: 'Run the forecast', group: 'Forecast', disabled: dataset === '', run: start }],
+        [dataset, config, periods, weather, run.busy],
+    )
     const noData = datasets.data !== undefined && datasets.data.length === 0
     return (
         <Section title="New forecast" description="Train on the whole dataset and forecast the periods after its last one.">
             <Stack gap="lg">
-                <ReadProblem what="the datasets" resource={datasets} />
-                <ReadProblem what="the configs" resource={configs} tone="warning" />
+                <ReadState what="the datasets" resource={datasets} />
+                <ReadState what="the configs" resource={configs} />
                 {noData ? (
                     <Problem
                         tone="warning"
@@ -75,7 +81,7 @@ function NewForecast({ onDone }: { onDone: (artifactId: string) => void }) {
                     </div>
                 )}
                 <div>
-                    <Button onClick={start} disabled={dataset === ''} reason={run.reason}>
+                    <Button onClick={start} disabled={dataset === ''} busy={run.busy}>
                         <Play aria-hidden />
                         Run forecast
                     </Button>
@@ -130,7 +136,7 @@ function ForecastView({ id }: { id: string }) {
         saveFile(`forecast-${dataset.data?.name ?? id}.csv`, toCsv(rows, ['location', 'time_period', 'median', 'q10', 'q25', 'q75', 'q90']))
 
     return (
-        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status}>
+        <PageState loading={artifact.loading} error={artifact.error?.detail ?? artifact.error?.message} status={artifact.error?.status} onRetry={artifact.reload}>
             {result && artifact.data && (
                 <Stack gap="section">
                     <PageHeader
@@ -230,7 +236,7 @@ function PastForecasts() {
     return (
         <Section title="Past forecasts" meta={history.data ? `${history.data.total}` : undefined} flush>
             {history.error ? (
-                <ReadProblem what="the past forecasts" resource={history} />
+                <ReadState what="the past forecasts" resource={history} />
             ) : (
                 <DataTable
                     columns={pastColumns(names)}

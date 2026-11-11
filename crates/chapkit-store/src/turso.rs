@@ -307,22 +307,25 @@ impl Store for TursoStore {
         get_config(&*self.conn.lock().await, id).await
     }
 
-    async fn list_configs(&self, page: Option<Page>) -> StoreResult<(Vec<ConfigRow>, u64)> {
+    async fn list_configs(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<ConfigRow>, u64)> {
+        let (filter, args) = crate::name_filter(name);
+        let args: Vec<Value> = args.into_iter().map(Value::Text).collect();
         let c = self.conn.lock().await;
-        let total = match rows(&c, "SELECT COUNT(*) FROM configs", vec![])
-            .await?
-            .into_iter()
-            .next()
-            .and_then(|r| r.into_iter().next())
-        {
-            Some(Value::Integer(n)) => n.max(0) as u64,
-            _ => 0,
-        };
+        let total = count(
+            &c,
+            &format!("SELECT COUNT(*) FROM configs{filter}"),
+            args.clone(),
+        )
+        .await?;
         let sql = format!(
-            "SELECT {CONFIG_COLS} FROM configs ORDER BY id{}",
+            "SELECT {CONFIG_COLS} FROM configs{filter} ORDER BY id{}",
             page_sql(page)
         );
-        let list = rows(&c, &sql, vec![])
+        let list = rows(&c, &sql, args)
             .await?
             .into_iter()
             .map(config_from)
@@ -480,21 +483,26 @@ impl Store for TursoStore {
     async fn list_artifacts_of_type(
         &self,
         kind: &str,
+        datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
-        const WHERE: &str = "WHERE json_extract(data, '$.type') = ?1";
+        if datasets.is_some_and(<[String]>::is_empty) {
+            return Ok((Vec::new(), 0));
+        }
+        let (filter, args) = crate::type_filter(kind, datasets);
+        let args: Vec<Value> = args.into_iter().map(Value::Text).collect();
         let c = self.conn.lock().await;
         let total = count(
             &c,
-            &format!("SELECT COUNT(*) FROM artifacts {WHERE}"),
-            vec![s(kind)],
+            &format!("SELECT COUNT(*) FROM artifacts{filter}"),
+            args.clone(),
         )
         .await?;
         let sql = format!(
-            "SELECT {ARTIFACT_COLS} FROM artifacts {WHERE} ORDER BY id{}",
+            "SELECT {ARTIFACT_COLS} FROM artifacts{filter} ORDER BY id{}",
             page_sql(page)
         );
-        let list = rows(&c, &sql, vec![s(kind)])
+        let list = rows(&c, &sql, args)
             .await?
             .into_iter()
             .map(artifact_from)
@@ -678,14 +686,25 @@ impl Store for TursoStore {
         )
     }
 
-    async fn list_datasets(&self, page: Option<Page>) -> StoreResult<(Vec<DatasetRow>, u64)> {
+    async fn list_datasets(
+        &self,
+        name: Option<&str>,
+        page: Option<Page>,
+    ) -> StoreResult<(Vec<DatasetRow>, u64)> {
+        let (filter, args) = crate::name_filter(name);
+        let args: Vec<Value> = args.into_iter().map(Value::Text).collect();
         let c = self.conn.lock().await;
-        let total = count(&c, "SELECT COUNT(*) FROM datasets", vec![]).await?;
+        let total = count(
+            &c,
+            &format!("SELECT COUNT(*) FROM datasets{filter}"),
+            args.clone(),
+        )
+        .await?;
         let sql = format!(
-            "SELECT {DATASET_COLS} FROM datasets ORDER BY id{}",
+            "SELECT {DATASET_COLS} FROM datasets{filter} ORDER BY id{}",
             page_sql(page)
         );
-        let list = rows(&c, &sql, vec![])
+        let list = rows(&c, &sql, args)
             .await?
             .into_iter()
             .map(dataset_from)

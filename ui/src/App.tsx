@@ -2,10 +2,12 @@ import { AccountMenu } from '@winterop-com/sokkel-ui/AccountMenu'
 import { Banner } from '@winterop-com/sokkel-ui/Banner'
 import type { PaletteGroup } from '@winterop-com/sokkel-ui/CommandPalette'
 import { useAppearance } from '@winterop-com/sokkel-ui/hooks/use-appearance'
+import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
 import { THEMES } from '@winterop-com/sokkel-ui/lib/appearance'
 import { appearanceCommands, placeCommands } from '@winterop-com/sokkel-ui/lib/commands'
 import { Rail, type RailGroup } from '@winterop-com/sokkel-ui/Rail'
 import { SchemeToggle } from '@winterop-com/sokkel-ui/SchemeToggle'
+import { Search } from '@winterop-com/sokkel-ui/Search'
 import { Page, Shell } from '@winterop-com/sokkel-ui/Shell'
 import { StatusItem, StatusLine } from '@winterop-com/sokkel-ui/StatusLine'
 import { TopBar, type Crumb } from '@winterop-com/sokkel-ui/TopBar'
@@ -20,8 +22,10 @@ import { createContext, Fragment, lazy, Suspense, useContext, useMemo, useState,
 import { api } from './api/client'
 import type { Health, Info } from './api/types'
 import { dismissKeyRequest, setApiKey, useApiKey } from './lib/apikey'
+import { actionCommands, PLACE_KEYS, withPlaceKeys } from './lib/commands'
 import { useResource } from './lib/resource'
 import { go, useRoute } from './lib/router'
+import { resultRoute, searchService } from './lib/search'
 
 // Each page loads the first time it is opened.
 const ApiPage = lazy(() => import('./pages/ApiPage').then((module) => ({ default: module.ApiPage })))
@@ -118,6 +122,29 @@ function ApiKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
     )
 }
 
+/** The keys that go to each place, bound inside the shell so its shortcuts dialog lists them. */
+function PlaceKeys() {
+    useShortcuts(
+        PLACES.filter((place) => PLACE_KEYS[place.id] !== undefined).map((place) => ({
+            id: `go-${place.id}`,
+            key: PLACE_KEYS[place.id]!,
+            label: `Go to ${place.label}`,
+            group: 'Go to',
+            run: () => go(place.id === 'overview' ? '/' : `/${place.id}`),
+        })),
+        [],
+    )
+    return null
+}
+
+/** Opens a record a search found. */
+const openFound = (result: { id: string }, group: { kind: string }) => go(resultRoute(group.kind, result.id))
+
+/** The palette opens where nothing stands over the page, or over the top bar's search, which it replaces. */
+const openOver = (over: Element | null) => over === null || over.getAttribute('data-slot') === 'search-results'
+
+const SEARCH_WORDS = { placeholder: 'Search datasets, runs and configs' }
+
 function healthNote(health: Health | undefined, failed: boolean): { note: string; tone?: 'warn' | 'error' } {
     if (failed) return { note: 'Service not answering', tone: 'error' }
     if (health === undefined) return { note: 'Connecting' }
@@ -133,6 +160,10 @@ export function App() {
     const page = PLACES.some((place) => place.id === first) ? first : 'missing'
     const credentials = useApiKey()
     const [askingKey, setAskingKey] = useState(false)
+    const [showingKeys, setShowingKeys] = useState(false)
+    const [searched, setSearched] = useState('')
+    const [searching, setSearching] = useState(false)
+    const [paletteOpen, setPaletteOpen] = useState(false)
     // A new key reads everything again: the app's own reads by their deps, the page by remounting.
     const info = useResource(api.info, [credentials.version])
     const health = useResource(api.health, [credentials.version], 15_000)
@@ -159,7 +190,8 @@ export function App() {
     }, [page, running])
 
     const palette: PaletteGroup[] = [
-        ...placeCommands(groups, (href) => go(href.slice(1))),
+        ...withPlaceKeys(placeCommands(groups, (href) => go(href.slice(1)))),
+        ...actionCommands({ go, hasKey: credentials.key !== undefined, askKey: () => setAskingKey(true), showShortcuts: () => setShowingKeys(true) }),
         ...appearanceCommands(settings, setSettings, { themes: THEMES.filter((theme) => theme.value === 'tidevann') }).map((group) => ({
             ...group,
             rank: 20,
@@ -178,7 +210,7 @@ export function App() {
     else if (page === 'datasets') content = second === undefined ? <Datasets /> : <DatasetPage id={second} />
     else if (page === 'evaluate') content = <Evaluate opened={second} />
     else if (page === 'forecast') content = <Forecast opened={second} />
-    else if (page === 'configs') content = <Configs />
+    else if (page === 'configs') content = <Configs opened={second} />
     else if (page === 'jobs') content = <Jobs />
     else if (page === 'artifacts') content = <Artifacts opened={second} />
     else if (page === 'system') content = <System />
@@ -200,6 +232,20 @@ export function App() {
         <ModelContext.Provider value={model}>
             <Shell
                 palette={palette}
+                paletteOpen={paletteOpen}
+                onPaletteOpenChange={(open) => {
+                    // The palette takes the place of the top bar's search.
+                    if (open) setSearching(false)
+                    setPaletteOpen(open)
+                }}
+                mayOpenPalette={openOver}
+                paletteFilter="terms"
+                paletteSearch={{ search: searchService, onOpen: openFound }}
+                paletteWords={{ placeholder: 'Go to a page, run an action, or find a dataset, run or config' }}
+                paletteFoot={{ mark: <Mark />, name: 'Modeling' }}
+                shortcuts={[]}
+                shortcutsOpen={showingKeys}
+                onShortcutsOpenChange={setShowingKeys}
                 route={route.join('/')}
                 banner={
                     info.error !== undefined && info.error.status !== 401 ? (
@@ -229,6 +275,20 @@ export function App() {
                 top={
                     <TopBar
                         trail={trail}
+                        search={
+                            <Search
+                                search={searchService}
+                                query={searched}
+                                onQueryChange={setSearched}
+                                open={searching}
+                                onOpenChange={setSearching}
+                                onOpen={(result, group) => {
+                                    setSearched('')
+                                    openFound(result, group)
+                                }}
+                                words={SEARCH_WORDS}
+                            />
+                        }
                         actions={
                             <>
                                 {model !== undefined && (
@@ -253,6 +313,7 @@ export function App() {
                     </StatusLine>
                 }
             >
+                <PlaceKeys />
                 <Page>
                     {/* A page per route and key: what it read for one resource never shows under another. */}
                     <Suspense fallback={null}>

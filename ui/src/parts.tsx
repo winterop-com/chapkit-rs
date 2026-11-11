@@ -3,10 +3,11 @@ import { ChartFrame } from '@winterop-com/sokkel-ui-charts/ChartFrame'
 import { chartLegend } from '@winterop-com/sokkel-ui-charts/chart-legend'
 import { FilterChip } from '@winterop-com/sokkel-ui/FilterChip'
 import { LoadingBar } from '@winterop-com/sokkel-ui/Loaders'
+import { PageState } from '@winterop-com/sokkel-ui/PageState'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { StatusChip } from '@winterop-com/sokkel-ui/StatusChip'
 import { Button } from '@winterop-com/sokkel-ui/primitives/button'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { aborted, ApiError, api, asApiError } from './api/client'
 import type { Config, Dataset, Job, JobSubmitted } from './api/types'
@@ -31,21 +32,18 @@ export const WEATHER = [
     { value: 'observed', label: 'Observed (oracle)' },
 ]
 
-/** A read that failed, said with what failed and a way to try again. */
-export function ReadProblem({ what, resource, tone }: { what: string; resource: Resource<unknown>; tone?: 'error' | 'warning' }) {
+/** A read's failure, said with what failed and a retry; the children while it has not failed. */
+export function ReadState({ what, resource, children }: { what: string; resource: Resource<unknown>; children?: ReactNode }) {
     const error = resource.error
-    if (error === undefined) return null
     return (
-        <Problem
-            tone={tone}
-            title={`Could not read ${what}: ${error.message}`}
-            detail={error.detail}
-            actions={
-                <Button size="sm" variant="outline" onClick={resource.reload}>
-                    Try again
-                </Button>
-            }
-        />
+        <PageState
+            loading={false}
+            error={error === undefined ? undefined : `Could not read ${what}: ${error.detail ?? error.message}`}
+            status={error?.status}
+            onRetry={resource.reload}
+        >
+            {children}
+        </PageState>
     )
 }
 
@@ -130,7 +128,7 @@ export function JobProgress({ jobId, what, onDone, onEnd }: { jobId: string; wha
  * Starts one job at a time from a form: refuses a second submission while one is on its way or its
  * job runs, and frees the form again once the job has failed, been canceled or gone.
  */
-export function useJobRun(what: string) {
+export function useJobRun() {
     const [submitting, setSubmitting] = useState(false)
     const [running, setRunning] = useState<{ job: string; artifact: string }>()
     const [ended, setEnded] = useState(false)
@@ -158,9 +156,7 @@ export function useJobRun(what: string) {
                 setSubmitting(false)
             })
     }
-    /** Why the run button cannot be pressed now, if it cannot. */
-    const reason = submitting ? `Starting the ${what}` : live ? `The ${what} is running` : undefined
-    return { start, submitting, running, live, error, reason, onEnd: () => setEnded(true) }
+    return { start, submitting, running, live, error, busy: submitting || live, onEnd: () => setEnded(true) }
 }
 
 /** Picks some of a dataset's locations, searching once there are many. */
@@ -283,6 +279,6 @@ export function useHistory(
 export function HistoryNote({ dataset, history }: { dataset: Resource<Dataset> | undefined; history: Resource<unknown> }) {
     if (dataset?.error?.status === 404)
         return <Problem tone="warning" title="The dataset this came from is gone" detail="The charts show the forecasts without the history before them." />
-    if (dataset?.error !== undefined) return <ReadProblem what="the dataset" resource={dataset} tone="warning" />
-    return <ReadProblem what="the observed history" resource={history} tone="warning" />
+    if (dataset?.error !== undefined) return <ReadState what="the dataset" resource={dataset} />
+    return <ReadState what="the observed history" resource={history} />
 }

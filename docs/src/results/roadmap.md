@@ -43,6 +43,14 @@ Next:
   against the truth), forecasts (`$forecast` past the end of the data), configs, jobs, artifacts, system and API
   pages. Released without a design review; 0.6.0 reviews it with the user and fixes what that finds.
 
+- **Generated datasets**: make a stored dataset from the synthetic generator instead of uploading one, so a
+  model can be tried, evaluated and forecast straight away. The generator exists (`chapkit::synth`, served as
+  `$generate-sample-data`; [guide](../guide/sample-data.md)); what is missing is storing its output as a
+  dataset: a `POST /api/v1/datasets/$generate` taking the generator's settings (name, locations, periods,
+  monthly or weekly, start, covariates, seed), defaulting to the model's period type and required covariates,
+  bounded like `$generate-sample-data`. In the UI, a "Generate" choice beside Upload on the Datasets page (and
+  in the command palette), with the seed shown so a dataset can be made again.
+
 - **Hyperparameter search** ([guide](../guide/hpo.md)). Done: `chapkit-hpo`, random and grid search over
   the chap-core search space, each trial an in-process backtest, trials in parallel and reproducible by
   seed; `<bin> hpo` and the `$hpo` job endpoint, which can create the best config. About 2000 trials per

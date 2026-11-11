@@ -46,6 +46,22 @@ test('a 401 asks for a key', async () => {
     expect(keyWanted()).toBe(false)
 })
 
+test('a late 401 for a request sent with an older key does not refuse the key given since', async () => {
+    setApiKey('old')
+    let answer: (response: Response) => void = () => {}
+    globalThis.fetch = (() => new Promise<Response>((resolve) => (answer = resolve))) as unknown as typeof fetch
+    const pending = api.downloadArtifact('01J')
+    setApiKey('new')
+    answer(json({ title: 'Unauthorized' }, 401))
+    await expect(pending).rejects.toMatchObject({ status: 401 })
+    expect(apiKey()).toBe('new')
+    expect(keyWanted()).toBe(false)
+    // A 401 for the current key still asks.
+    serve(() => json({ title: 'Unauthorized' }, 401))
+    await expect(api.info()).rejects.toMatchObject({ status: 401 })
+    expect(keyWanted()).toBe(true)
+})
+
 test('an unhealthy service answers 503 with its health, which is kept', async () => {
     serve(() => json({ status: 'unhealthy', checks: { database: { state: 'unhealthy', message: 'Check failed: locked' } } }, 503))
     expect(await readHealth()).toEqual({ status: 'unhealthy', checks: { database: { state: 'unhealthy', message: 'Check failed: locked' } } })

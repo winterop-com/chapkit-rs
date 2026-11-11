@@ -142,7 +142,9 @@ fn check_split_frame(frame: &DataFrame, what: &str) -> ApiResult<()> {
     Ok(())
 }
 
-/// Each split's history (its own, or the shared one cut at `historic_end`), checked frames and run settings.
+/// Each split's history (its own, or the shared one up to `historic_end`, cut later when the split
+/// runs), checked frames and run settings. Cheap checks only: nothing is copied here. The futures'
+/// rows together are at most `CHAPKIT_MAX_PREDICTION_CELLS`, since each makes at least one cell.
 fn resolve_splits(
     s: &AppState,
     historic: Option<&DataFrame>,
@@ -150,19 +152,34 @@ fn resolve_splits(
     run_info: Option<&crate::wire::RunInfoIn>,
     config: &serde_json::Value,
 ) -> ApiResult<Vec<ml::Split>> {
-    let shared = match historic {
-        Some(h) => {
-            check_split_frame(h, "historic")?;
-            Some((h, ml::frame_periods(h).map_err(Problem::bad_request)?))
-        }
-        None => None,
-    };
+    if let Some(h) = historic {
+        check_split_frame(h, "historic")?;
+    }
+    let future_rows = raw
+        .iter()
+        .map(|s| s.future.n_rows())
+        .fold(0usize, usize::saturating_add);
+    let max = chapkit_core::max_prediction_cells();
+    if future_rows > max {
+        return Err(Problem::bad_request(format!(
+            "the splits' futures have {future_rows} rows together, more than the limit of {max} \
+             forecast cells (CHAPKIT_MAX_PREDICTION_CELLS); ask for fewer splits"
+        )));
+    }
     let mut splits = Vec::with_capacity(raw.len());
     for (i, split) in raw.into_iter().enumerate() {
-        let historic = match (split.historic, split.historic_end, &shared) {
-            (Some(h), None, _) => h,
-            (None, Some(end), Some((h, periods))) => ml::history_until(h, periods, &end)
-                .map_err(|m| Problem::bad_request(format!("splits[{i}]: {m}")))?,
+        let history = match (split.historic, split.historic_end, historic) {
+            (Some(h), None, _) => {
+                check_split_frame(&h, &format!("splits[{i}].historic"))?;
+                ml::History::Own(h)
+            }
+            (None, Some(end), Some(_)) => {
+                ml::History::Until(chapkit_core::Period::parse(&end).ok_or_else(|| {
+                    Problem::bad_request(format!(
+                        "splits[{i}]: historic_end '{end}' is not a period"
+                    ))
+                })?)
+            }
             (None, Some(_), None) => {
                 return Err(Problem::bad_request(format!(
                     "splits[{i}]: historic_end needs a shared historic"
@@ -179,12 +196,11 @@ fn resolve_splits(
                 )));
             }
         };
-        check_split_frame(&historic, &format!("splits[{i}].historic"))?;
         check_split_frame(&split.future, &format!("splits[{i}].future"))?;
         let run = ml::resolve_run(s, run_info, config, Some(&split.future))
             .map_err(|e| Problem::bad_request(format!("splits[{i}]: {}", e.message)))?;
         splits.push(ml::Split {
-            historic,
+            history,
             future: split.future,
             run,
         });
@@ -244,6 +260,7 @@ async fn predict_splits(
     // Dropping `run` (the job deleted, the caller gone) cancels the forecasts while they wait
     // for a permit; once the model runs, its permit is held until it returns.
     let state = s.clone();
+    let shared = req.historic;
     let mut run = AbortOnDrop(tokio::spawn(async move {
         let permit = state
             .inner
@@ -252,7 +269,7 @@ async fn predict_splits(
             .acquire_owned()
             .await
             .map_err(|_| chapkit_http::JobError::runtime("shutting down"))?;
-        ml::predict_split_frames(&state, trained, config, splits, req.geo, permit).await
+        ml::predict_split_frames(&state, trained, config, shared, splits, req.geo, permit).await
     }));
     if !s.inner.eager_wait.is_zero()
         && let Ok(joined) = tokio::time::timeout(s.inner.eager_wait, &mut run.0).await
@@ -508,6 +525,27 @@ struct SampleParams {
     seed: Option<i64>,
 }
 
+/// The `additional_continuous_covariates` of stored config `cid`.
+async fn config_covariates(s: &AppState, cid: &str) -> ApiResult<Vec<String>> {
+    parse_ulid(cid).map_err(|_| Problem::bad_request(format!("Invalid config_id: '{cid}'")))?;
+    let cfg = s
+        .store()
+        .get_config(cid)
+        .await
+        .map_err(crate::state::store_problem)?
+        .ok_or_else(|| Problem::not_found(format!("Config {cid} not found")))?;
+    Ok(cfg
+        .data
+        .get("additional_continuous_covariates")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// A ready-to-submit sample `$train` or `$predict` payload from the synthetic data
 /// generator (same columns and options as Python chapkit's).
 #[utoipa::path(get, path = "/$generate-sample-data", tag = "ML", params(SampleParams),
@@ -515,29 +553,15 @@ struct SampleParams {
 async fn generate_sample_data(
     State(s): State<AppState>,
     chapkit_http::Query(p): chapkit_http::Query<SampleParams>,
-) -> ApiResult<axum::Json<serde_json::Value>> {
+) -> ApiResult<axum::response::Response> {
+    use axum::http::{HeaderValue, header::CONTENT_TYPE};
+    use axum::response::IntoResponse;
     use chapkit_core::synth::{Resolution, Spec};
     let info = s.model().info();
-    let mut config_covariates = Vec::new();
-    if let Some(cid) = &p.config_id {
-        parse_ulid(cid).map_err(|_| Problem::bad_request(format!("Invalid config_id: '{cid}'")))?;
-        let cfg = s
-            .store()
-            .get_config(cid)
-            .await
-            .map_err(crate::state::store_problem)?
-            .ok_or_else(|| Problem::not_found(format!("Config {cid} not found")))?;
-        config_covariates = cfg
-            .data
-            .get("additional_continuous_covariates")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-    }
+    let config_covariates = match &p.config_id {
+        Some(cid) => config_covariates(&s, cid).await?,
+        None => Vec::new(),
+    };
     let resolution = match p.period_type.as_deref() {
         Some("weekly") => Resolution::Weekly,
         Some("monthly") => Resolution::Monthly,
@@ -590,15 +614,18 @@ async fn generate_sample_data(
              limit of {MAX_SAMPLE_CELLS}; ask for fewer locations, periods or features"
         )));
     }
-    // Generated and serialized on a blocking thread, bounded like $predict-sync.
-    let _permit = s
+    // Generated and serialized to the response bytes on a blocking thread that holds its permit
+    // throughout, bounded like $predict-sync: no large serialization runs on an async worker.
+    let permit = s
         .inner
         .sync_permits
-        .acquire()
+        .clone()
+        .acquire_owned()
         .await
         .map_err(|_| Problem::internal())?;
     let config_id = p.config_id;
-    let payload = tokio::task::spawn_blocking(move || {
+    let body = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         sample_payload(
             &spec,
             &kind,
@@ -610,10 +637,14 @@ async fn generate_sample_data(
     })
     .await
     .map_err(|_| Problem::internal())??;
-    Ok(axum::Json(payload))
+    Ok((
+        [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+        body,
+    )
+        .into_response())
 }
 
-/// A `$generate-sample-data` payload: `predict` gives `num_periods` historic periods and
+/// A `$generate-sample-data` payload, serialized: `predict` gives `num_periods` historic periods and
 /// `spec.num_periods` future ones; `geo` asks for a grid (`Some(true)` of points).
 fn sample_payload(
     spec: &chapkit_core::synth::Spec,
@@ -622,7 +653,7 @@ fn sample_payload(
     seed: Option<u64>,
     config_id: Option<&str>,
     geo: Option<bool>,
-) -> ApiResult<serde_json::Value> {
+) -> ApiResult<Vec<u8>> {
     use chapkit_core::synth::Generator;
     let mut generator = Generator::new(seed);
     let gen_err = |e: chapkit_core::Error| Problem::bad_request(e.to_string());
@@ -642,7 +673,7 @@ fn sample_payload(
     if let Some(points) = geo {
         payload["geo"] = Generator::geo(spec.num_locations, points);
     }
-    Ok(payload)
+    serde_json::to_vec(&payload).map_err(|_| Problem::internal())
 }
 
 /// Run the model's `validate_train` / `validate_predict` on a blocking thread: they are model code,

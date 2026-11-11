@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 
 use chapkit_core::{Column, DataFrame, Error, Period, Result, cols};
 
+use crate::budget;
+
 /// What [`prepare`] does beyond grouping, sorting and rejecting duplicates. The default is
 /// chap-core's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,8 +35,16 @@ impl Default for Prepare {
 
 /// The most rows [`prepare`] makes, after filling and padding: chap-core's preparation of a
 /// larger dataset is refused before anything is allocated. 100,000 locations of ten years of
-/// weekly data fit.
+/// weekly data fit. [`MAX_PREPARED_BYTES`] bounds their width.
 pub const MAX_PREPARED_ROWS: usize = 60_000_000;
+
+/// The most memory [`prepare`]'s result and its bookkeeping take, estimated from the rows it makes
+/// times the bytes per row (every column by type, filled numeric columns as floats, plus the row's
+/// period, source row and location while building): a larger dataset is refused before anything is
+/// allocated. 100,000 locations x 120 months x 6 numeric columns take about 1.9 GB, and ten years of
+/// weekly data about 8 GB, so 16 GiB leaves room while refusing a small request that would expand
+/// into tens of gigabytes.
+pub const MAX_PREPARED_BYTES: u64 = 16 << 30;
 
 /// The number of periods from `first` to `last` (inclusive, 0 when `last` is earlier). Fails for
 /// a monthly and a weekly period, and for Sunday-start weeks.
@@ -68,6 +78,22 @@ fn check_rows(rows: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Bytes one prepared row of `data` takes: its columns (numeric ones as floats, as filling makes
+/// them) and the period, source row and location kept per row while building.
+fn prepared_row_bytes(data: &DataFrame) -> u64 {
+    let columns = data
+        .iter()
+        .map(|(_, c)| match c {
+            Column::Bool(_) => 16,
+            c => budget::cell_bytes(c),
+        })
+        .fold(0, u64::saturating_add);
+    columns
+        .saturating_add(budget::size::<Period>())
+        .saturating_add(budget::size::<Option<usize>>())
+        .saturating_add(budget::size::<&str>())
 }
 
 /// The periods from `first` to `last`, contiguous. Fails for Sunday-start weeks, for a monthly
@@ -150,6 +176,11 @@ fn fill(name: &str, col: &Column, rows: &[Option<usize>]) -> Result<Column> {
 /// Prepare `data` for a backtest as chap-core does, with `options` (see [`Prepare`]). Rows come out
 /// by location (sorted), then period; `time_period` is written as [`Period`] displays it.
 pub fn prepare(data: &DataFrame, options: &Prepare) -> Result<DataFrame> {
+    prepare_within(data, *options, MAX_PREPARED_BYTES)
+}
+
+/// [`prepare`] with a memory budget of `max_bytes`.
+fn prepare_within(data: &DataFrame, options: Prepare, max_bytes: u64) -> Result<DataFrame> {
     let index = index(data)?;
     let first = index
         .values()
@@ -164,7 +195,7 @@ pub fn prepare(data: &DataFrame, options: &Prepare) -> Result<DataFrame> {
     let (Some(first), Some(last)) = (first, last) else {
         return Ok(data.clone());
     };
-    // The rows this makes, counted before any is allocated.
+    // The rows this makes and their memory, counted before any is allocated.
     let mut total = 0usize;
     for by_period in index.values() {
         let (Some(&own_first), Some(&own_last)) =
@@ -181,6 +212,12 @@ pub fn prepare(data: &DataFrame, options: &Prepare) -> Result<DataFrame> {
         total = total.saturating_add(n);
     }
     check_rows(total)?;
+    budget::check(
+        &format!("the prepared dataset ({total} rows, periods filled and padded per location)"),
+        budget::times(total, prepared_row_bytes(data)),
+        max_bytes,
+        "keep the gaps, do not pad, or drop columns",
+    )?;
     let mut periods: Vec<Period> = Vec::new();
     let mut rows: Vec<Option<usize>> = Vec::new();
     let mut locations: Vec<&str> = Vec::new();
@@ -334,6 +371,44 @@ mod tests {
             .unwrap(),
             54
         );
+    }
+
+    /// The budget counts bytes, so column width matters: 500 locations over 1000-01..9999-12
+    /// (54 million rows) with 100 numeric columns are about 87 GB and refused; checked with a small
+    /// budget first, so nothing large is allocated.
+    #[test]
+    fn prepared_bytes_count_columns() {
+        let wide = |rows: &[(&str, &str)], width: usize| {
+            let mut df = frame(
+                &rows
+                    .iter()
+                    .map(|r| (r.0, r.1, Some(1.0)))
+                    .collect::<Vec<_>>(),
+            );
+            for c in 0..width {
+                df.push_column(format!("x{c}"), Column::Float(vec![Some(1.0); rows.len()]))
+                    .unwrap();
+            }
+            df
+        };
+        // Two locations, one filled to three months: 6 rows; 10 columns of 16 bytes do not fit 1 KB.
+        let small = wide(&[("2020-01", "A"), ("2020-03", "A"), ("2020-01", "B")], 10);
+        let e = prepare_within(&small, Prepare::default(), 1_000)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("more than the limit"), "{e}");
+        assert!(prepare_within(&small, Prepare::default(), 10_000).is_ok());
+        let row = prepared_row_bytes(&wide(&[("2020-01", "A")], 100));
+        let n = span(
+            Period::parse("1000-01").unwrap(),
+            Period::parse("9999-12").unwrap(),
+        )
+        .unwrap();
+        assert!(budget::times(n * 500, row) > MAX_PREPARED_BYTES);
+        // 100,000 locations x 120 months x 6 numeric columns fit, as do ten years of weekly data.
+        let realistic = prepared_row_bytes(&wide(&[("2020-01", "A")], 5));
+        assert!(budget::times(100_000 * 120, realistic) < MAX_PREPARED_BYTES / 4);
+        assert!(budget::times(100_000 * 522, realistic) < MAX_PREPARED_BYTES);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::Value;
 
 use crate::{
-    ArtifactRow, ConfigRow, DatasetRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
+    ArtifactRow, ConfigRow, DatasetRow, Listing, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
     StoreResult,
 };
 
@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS artifacts_parent ON artifacts(parent_id);
 CREATE INDEX IF NOT EXISTS artifacts_level ON artifacts(level);
+CREATE TABLE IF NOT EXISTS artifact_listings (
+    id         TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+    kind       TEXT,
+    dataset_id TEXT,
+    listing    TEXT NOT NULL,
+    tags       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS artifact_listings_kind ON artifact_listings(kind, dataset_id);
 CREATE TABLE IF NOT EXISTS config_artifacts (
     config_id   TEXT NOT NULL REFERENCES configs(id) ON DELETE CASCADE,
     artifact_id TEXT NOT NULL UNIQUE REFERENCES artifacts(id) ON DELETE CASCADE,
@@ -45,7 +55,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 ";
 
 const DATASET_COLS: &str = "id, name, meta, created_at, updated_at";
@@ -163,6 +173,7 @@ impl SqliteStore {
                 .map_err(|e| db(&e))?;
         }
         conn.execute_batch(SCHEMA).map_err(|e| db(&e))?;
+        backfill_listings(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -207,6 +218,51 @@ fn get_artifact_sync(c: &Connection, id: &str) -> StoreResult<Option<ArtifactRow
     .map_err(|e| db(&e))?
     .map(parse_artifact)
     .transpose()
+}
+
+/// Write `id`'s listing row (replacing one there was).
+fn put_listing(
+    c: &Connection,
+    id: &str,
+    data: &Value,
+    tags: &str,
+    created_at: &str,
+    updated_at: &str,
+) -> StoreResult<()> {
+    let l = Listing::of(data)?;
+    c.execute(
+        "INSERT OR REPLACE INTO artifact_listings (id, kind, dataset_id, listing, tags, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![id, l.kind, l.dataset_id, l.text, tags, created_at, updated_at],
+    )
+    .map_err(|e| db(&e))?;
+    Ok(())
+}
+
+/// Give every artifact without a listing row one: those of a database from before listings
+/// (one at a time, so only one artifact's data is in memory). A no-op afterwards.
+fn backfill_listings(c: &Connection) -> StoreResult<()> {
+    let ids: Vec<String> = {
+        let mut stmt = c
+            .prepare("SELECT id FROM artifacts WHERE id NOT IN (SELECT id FROM artifact_listings)")
+            .map_err(|e| db(&e))?;
+        stmt.query_map([], |r| r.get(0))
+            .map_err(|e| db(&e))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|e| db(&e))?
+    };
+    for id in ids {
+        let (data, tags, created, updated): (String, String, String, String) = c
+            .query_row(
+                "SELECT data, tags, created_at, updated_at FROM artifacts WHERE id = ?1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .map_err(|e| db(&e))?;
+        let data: Value = serde_json::from_str(&data).map_err(|e| json_err(&e))?;
+        put_listing(c, &id, &data, &tags, &created, &updated)?;
+    }
+    Ok(())
 }
 
 fn page_sql(page: Option<Page>) -> String {
@@ -323,12 +379,15 @@ impl Store for SqliteStore {
                 }
             };
             let (data, tags) = (to_text(&a.data)?, to_text(&a.tags)?);
-            c.execute(
+            let tx = c.transaction().map_err(|e| db(&e))?;
+            tx.execute(
                 "INSERT INTO artifacts (id, parent_id, level, data, content, tags, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
                 params![a.id, a.parent_id, level, data, a.content, tags, a.created_at],
             )
             .map_err(|e| if is_unique(&e) { StoreError::Conflict(format!("Artifact with id {} already exists", a.id)) } else { db(&e) })?;
+            put_listing(&tx, &a.id, &a.data, &tags, &a.created_at, &a.created_at)?;
+            tx.commit().map_err(|e| db(&e))?;
             get_artifact_sync(c, &a.id)?.ok_or_else(|| StoreError::Database("artifact vanished after insert".into()))
         })
         .await
@@ -371,35 +430,53 @@ impl Store for SqliteStore {
         .await
     }
 
-    async fn list_artifacts_of_type(
+    async fn list_artifact_summaries(
         &self,
-        kind: &str,
+        kind: Option<&str>,
         datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
-        if datasets.is_some_and(<[String]>::is_empty) {
+        if kind.is_some() && datasets.is_some_and(<[String]>::is_empty) {
             return Ok((Vec::new(), 0));
         }
         let (filter, args) = crate::type_filter(kind, datasets);
         self.with(move |c| {
             let total: i64 = c
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM artifacts{filter}"),
+                    &format!("SELECT COUNT(*) FROM artifact_listings l{filter}"),
                     params_from_iter(&args),
                     |r| r.get(0),
                 )
                 .map_err(|e| db(&e))?;
+            // parent_id and level come before data in an artifact's record: reading them does
+            // not read data.
             let sql = format!(
-                "SELECT {ARTIFACT_COLS} FROM artifacts{filter} ORDER BY id{}",
+                "SELECT l.id, a.parent_id, a.level, l.listing, l.tags, l.created_at, l.updated_at
+                 FROM artifact_listings l JOIN artifacts a ON a.id = l.id{filter} ORDER BY l.id{}",
                 page_sql(page)
             );
             let mut stmt = c.prepare(&sql).map_err(|e| db(&e))?;
             let rows = stmt
                 .query_map(params_from_iter(&args), artifact_row)
                 .map_err(|e| db(&e))?;
-            let rows = rows
+            let mut rows = rows
                 .map(|r| r.map_err(|e| db(&e)).and_then(parse_artifact))
                 .collect::<StoreResult<Vec<_>>>()?;
+            drop(stmt);
+            for row in rows.iter_mut().filter(|r| crate::lacks_summary(&r.data)) {
+                if let Some(full) = get_artifact_sync(c, &row.id)? {
+                    put_listing(
+                        c,
+                        &row.id,
+                        &full.data,
+                        &to_text(&full.tags)?,
+                        &full.created_at,
+                        &full.updated_at,
+                    )?;
+                    row.data = serde_json::from_str(&Listing::of(&full.data)?.text)
+                        .map_err(|e| json_err(&e))?;
+                }
+            }
             Ok((rows, total.max(0) as u64))
         })
         .await
@@ -414,18 +491,27 @@ impl Store for SqliteStore {
     ) -> StoreResult<Option<ArtifactRow>> {
         let id = id.to_owned();
         self.with(move |c| {
-            let (data, tags) = (to_text(&data)?, to_text(&tags)?);
-            let n = c
+            let (text, tags) = (to_text(&data)?, to_text(&tags)?);
+            let tx = c.transaction().map_err(|e| db(&e))?;
+            let n = tx
                 .execute(
                     "UPDATE artifacts SET data = ?2, tags = ?3, updated_at = ?4 WHERE id = ?1",
-                    params![id, data, tags, updated_at],
+                    params![id, text, tags, updated_at],
                 )
                 .map_err(|e| db(&e))?;
             if n == 0 {
-                Ok(None)
-            } else {
-                get_artifact_sync(c, &id)
+                return Ok(None);
             }
+            let created: String = tx
+                .query_row(
+                    "SELECT created_at FROM artifacts WHERE id = ?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| db(&e))?;
+            put_listing(&tx, &id, &data, &tags, &created, &updated_at)?;
+            tx.commit().map_err(|e| db(&e))?;
+            get_artifact_sync(c, &id)
         })
         .await
     }

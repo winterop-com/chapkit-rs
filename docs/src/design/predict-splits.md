@@ -79,8 +79,12 @@ in `tests/contract.rs`).
 - Otherwise: 202 with `job_id` and `artifact_id`, like `$predict`; the job's `ml_prediction_splits` artifact,
   a child of the training artifact, holds the list in `data.content`.
 - 404 for an unknown training artifact; 400 for an empty `splits`, a split without history, a `historic_end`
-  that is not a period or cuts no rows, a frame without rows or without `time_period` and `location`, or another
-  config; 422 for a body that is not chapkit dataframe JSON.
+  that is not a period or cuts no rows, a frame without rows or without `time_period` and `location`, futures
+  with more rows together than `CHAPKIT_MAX_PREDICTION_CELLS`, or another config; 422 for a body that is not
+  chapkit dataframe JSON. A split's history cut from the shared one is made when the split runs (on the
+  blocking pool, holding the permit) and dropped after it, so ten thousand splits of one history hold the
+  request and one cut, not ten thousand copies; a cut that finds no rows fails then (400 within the eager
+  budget, else a failed job). The forecasts together hold at most `CHAPKIT_MAX_PREDICTION_CELLS` cells.
 
 Measured in-process with criterion (`make bench BENCH=backtest_forecasts`; HTTP router in-process, no network),
 136 locations x 300 weeks, 7 splits of 12 weeks, stride 4, 100 samples per forecast:

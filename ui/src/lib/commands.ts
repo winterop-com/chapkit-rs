@@ -1,5 +1,5 @@
 import type { PaletteCommand, PaletteGroup } from '@winterop-com/sokkel-ui/CommandPalette'
-import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
+import { bindingKeys } from '@winterop-com/sokkel-ui/lib/keys'
 import { Gauge, Keyboard, KeyRound, Plus, TrendingUp, Upload } from 'lucide-react'
 
 /** The first key of every way to a place: G, then the place's key. */
@@ -20,13 +20,19 @@ export const PLACE_KEYS: Readonly<Record<string, string>> = {
     system: 's',
 }
 
-/** The palette's places with the keys that go to each, G and the place's key, drawn at the row's end. */
+/** The keys that go to a place, G then the place's key; undefined for a place without one. */
+export function placeBinding(place: string): { key: string; next: string } | undefined {
+    const next = PLACE_KEYS[place]
+    return next === undefined ? undefined : { key: GO_KEY, next }
+}
+
+/** The palette's places with the keys that go to each, G then the place's key, drawn at the row's end. */
 export function withPlaceKeys(groups: readonly PaletteGroup[]): PaletteGroup[] {
     return groups.map((group) => ({
         ...group,
         commands: group.commands.map((command) => {
-            const key = PLACE_KEYS[command.id.replace(/^place-/, '')]
-            return key === undefined ? command : { ...command, keys: [...keyLabels({ key: GO_KEY }), ...keyLabels({ key })] }
+            const binding = placeBinding(command.id.replace(/^place-/, ''))
+            return binding === undefined ? command : { ...command, ...bindingKeys(binding) }
         }),
     }))
 }

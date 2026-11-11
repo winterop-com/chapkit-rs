@@ -118,8 +118,12 @@ pub(crate) fn describe(data: &DataFrame, target: &str) -> Result<DatasetMeta, St
     })
 }
 
-/// A stored dataset's frame as given.
-async fn stored_frame(s: &AppState, id: &str) -> ApiResult<(DataFrame, DatasetMeta)> {
+/// A stored dataset's frame as given: parsed once (on a blocking thread), then shared from the
+/// service's bounded cache ([`crate::state::FrameCache`]); stored datasets never change.
+async fn stored_frame(
+    s: &AppState,
+    id: &str,
+) -> ApiResult<(std::sync::Arc<DataFrame>, DatasetMeta)> {
     let id = parse_ulid(id)?.to_string();
     let row = s
         .store()
@@ -127,17 +131,25 @@ async fn stored_frame(s: &AppState, id: &str) -> ApiResult<(DataFrame, DatasetMe
         .await
         .map_err(store_problem)?
         .ok_or_else(|| not_found(&id))?;
+    let meta = out(row)?.meta;
+    if let Some(frame) = s.frames().get(&id) {
+        return Ok((frame, meta));
+    }
     let bytes = s
         .store()
         .dataset_data(&id)
         .await
         .map_err(store_problem)?
         .ok_or_else(|| not_found(&id))?;
-    let frame = serde_json::from_slice(&bytes).map_err(|e| {
+    let parsed = tokio::task::spawn_blocking(move || serde_json::from_slice::<DataFrame>(&bytes))
+        .await
+        .map_err(|_| Problem::internal())?;
+    let frame = std::sync::Arc::new(parsed.map_err(|e| {
         tracing::error!(error = %e, %id, "dataset.data");
         Problem::internal()
-    })?;
-    Ok((frame, out(row)?.meta))
+    })?);
+    s.frames().put(id, frame.clone());
+    Ok((frame, meta))
 }
 
 /// The dataset of a `$backtest` or `$forecast`: `data`, or the stored `dataset_id` with its target
@@ -153,7 +165,7 @@ pub(crate) async fn request_data(
         (None, Some(data)) => Ok((data, None)),
         (Some(id), None) => {
             let (frame, meta) = stored_frame(s, id).await?;
-            let frame = with_target_as_cases(frame, &meta.target)
+            let frame = with_target_as_cases(std::sync::Arc::unwrap_or_clone(frame), &meta.target)
                 .map_err(|e| Problem::bad_request(e.to_string()))?;
             Ok((frame, Some(parse_ulid(id)?.to_string())))
         }
@@ -327,6 +339,7 @@ async fn get(
 async fn delete(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     parse_ulid(&id)?;
     if s.store().delete_dataset(&id).await.map_err(store_problem)? {
+        s.frames().remove(&id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(not_found(&id))
@@ -431,7 +444,7 @@ impl Projection {
     /// The projected frame: the rows of the locations asked for, before `before`, in the `last`
     /// periods; only `time_period`, `location` and the `columns` asked for; with `canonical`, the
     /// periods written as chapkit writes them and the rows in period order.
-    fn apply(&self, frame: DataFrame) -> Result<DataFrame, Problem> {
+    fn apply<'a>(&self, frame: &'a DataFrame) -> Result<std::borrow::Cow<'a, DataFrame>, Problem> {
         let bad = |e: chapkit_core::FrameError| Problem::bad_request(e.to_string());
         let mut rows: Vec<usize> = (0..frame.n_rows()).collect();
         if !self.locations.is_empty() {
@@ -460,12 +473,13 @@ impl Projection {
             periods = keyed.into_iter().map(|(p, _)| p.to_string()).collect();
         }
         let mut out = if rows.len() == frame.n_rows() && !self.canonical {
-            frame
+            std::borrow::Cow::Borrowed(frame)
         } else {
-            frame.take(&rows).map_err(bad)?
+            std::borrow::Cow::Owned(frame.take(&rows).map_err(bad)?)
         };
         if self.canonical {
-            out.set_column(cols::TIME_PERIOD, Column::from_strs(periods))
+            out.to_mut()
+                .set_column(cols::TIME_PERIOD, Column::from_strs(periods))
                 .map_err(bad)?;
         }
         if !self.columns.is_empty() {
@@ -480,7 +494,7 @@ impl Projection {
                     keep.push(c);
                 }
             }
-            out = out.select(&keep).map_err(bad)?;
+            out = std::borrow::Cow::Owned(out.select(&keep).map_err(bad)?);
         }
         Ok(out)
     }
@@ -506,7 +520,7 @@ async fn data(
 ) -> ApiResult<Response> {
     let projection = Projection::parse(query.as_deref())?;
     let (frame, _) = stored_frame(&s, &id).await?;
-    Ok(axum::Json(projection.apply(frame)?).into_response())
+    Ok(axum::Json(projection.apply(&frame)?.as_ref()).into_response())
 }
 
 /// The router (mount at `/api/v1/datasets`).

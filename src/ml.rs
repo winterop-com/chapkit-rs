@@ -337,11 +337,9 @@ pub(crate) async fn predict(
 pub(crate) fn history_until(
     historic: &DataFrame,
     periods: &[Period],
-    end: &str,
+    end: Period,
 ) -> Result<DataFrame, String> {
-    let end_period =
-        Period::parse(end).ok_or_else(|| format!("historic_end '{end}' is not a period"))?;
-    let mask: Vec<bool> = periods.iter().map(|p| *p <= end_period).collect();
+    let mask: Vec<bool> = periods.iter().map(|p| *p <= end).collect();
     let cut = historic.filter(&mask).map_err(|e| e.to_string())?;
     if cut.is_empty() {
         return Err(format!("historic has no rows up to {end}"));
@@ -363,9 +361,15 @@ pub(crate) fn frame_periods(frame: &DataFrame) -> Result<Vec<Period>, String> {
         .collect()
 }
 
+/// A `$predict-splits` split's history: its own, or the shared one up to a period.
+pub(crate) enum History {
+    Own(DataFrame),
+    Until(Period),
+}
+
 /// A checked `$predict-splits` split: its inputs and run settings.
 pub(crate) struct Split {
-    pub historic: DataFrame,
+    pub history: History,
     pub future: DataFrame,
     pub run: RunInfo,
 }
@@ -375,29 +379,80 @@ pub(crate) async fn predict_split_frames(
     state: &AppState,
     trained: Trained,
     config: Value,
+    shared: Option<DataFrame>,
     splits: Vec<Split>,
     geo: Option<Geo>,
     permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<Vec<DataFrame>, JobError> {
     let model = state.model().clone();
-    // The permit goes with the model calls: held until they return, even when the caller is gone.
-    let frames = chapkit_http::jobs::blocking(move || {
+    let max_cells = chapkit_core::max_prediction_cells();
+    // The permit goes with the work: held until it returns, even when the caller is gone.
+    chapkit_http::jobs::blocking(move || {
         let _permit = permit;
-        splits
-            .iter()
-            .map(|s| {
-                model.predict(
-                    &trained,
-                    &config,
-                    PredictInput::new(&s.historic, &s.future, &s.run, geo.as_ref()),
-                )
-            })
-            .collect::<chapkit_core::Result<Vec<_>>>()
+        predict_splits_blocking(
+            model.as_ref(),
+            &trained,
+            &config,
+            shared.as_ref(),
+            &splits,
+            geo.as_ref(),
+            max_cells,
+        )
     })
     .await?
-    .map_err(|e| model_error(&e))?;
-    for f in &frames {
-        check_output(f)?;
+}
+
+/// [`predict_split_frames`]' work. A split's history cut from `shared` is made when its turn comes
+/// and dropped after, so the request's frames plus one cut are all the input held, however many
+/// splits share the history. The forecasts together hold at most `max_cells` cells
+/// (`CHAPKIT_MAX_PREDICTION_CELLS`, as one forecast does), checked as each arrives.
+fn predict_splits_blocking(
+    model: &dyn crate::erased::DynModel,
+    trained: &Trained,
+    config: &Value,
+    shared: Option<&DataFrame>,
+    splits: &[Split],
+    geo: Option<&Geo>,
+    max_cells: usize,
+) -> Result<Vec<DataFrame>, JobError> {
+    let periods = shared
+        .map(frame_periods)
+        .transpose()
+        .map_err(JobError::value)?;
+    let mut frames = Vec::with_capacity(splits.len());
+    let mut cells = 0usize;
+    for (i, split) in splits.iter().enumerate() {
+        let cut;
+        let historic = match (&split.history, shared, &periods) {
+            (History::Own(h), _, _) => h,
+            (History::Until(end), Some(h), Some(periods)) => {
+                cut = history_until(h, periods, *end)
+                    .map_err(|m| JobError::value(format!("splits[{i}]: {m}")))?;
+                &cut
+            }
+            (History::Until(_), _, _) => {
+                return Err(JobError::value(format!(
+                    "splits[{i}]: historic_end needs a shared historic"
+                )));
+            }
+        };
+        let frame = model
+            .predict(
+                trained,
+                config,
+                PredictInput::new(historic, &split.future, &split.run, geo),
+            )
+            .map_err(|e| model_error(&e))?;
+        check_output(&frame)?;
+        cells = cells.saturating_add(frame.n_rows().saturating_mul(frame.n_cols()));
+        if cells > max_cells {
+            return Err(JobError::value(format!(
+                "the forecasts of the first {} splits have {cells} cells together, more than the \
+                 limit of {max_cells} (CHAPKIT_MAX_PREDICTION_CELLS); ask for fewer splits",
+                i + 1
+            )));
+        }
+        frames.push(frame);
     }
     Ok(frames)
 }
@@ -453,3 +508,71 @@ pub(crate) fn level_label(level: i64) -> String {
 
 /// Hierarchy name.
 pub(crate) const HIERARCHY: &str = "ml_pipeline";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::erased::Erased;
+    use crate::eval_cmd::tests::Last;
+    use chapkit_core::Column;
+
+    fn frame(periods: &[&str], cases: bool) -> DataFrame {
+        let mut df = DataFrame::new();
+        df.push_column(
+            cols::TIME_PERIOD,
+            Column::from_strs(periods.iter().copied()),
+        )
+        .unwrap();
+        df.push_column(
+            cols::LOCATION,
+            Column::from_strs(periods.iter().map(|_| "A")),
+        )
+        .unwrap();
+        if cases {
+            let y = (1..=periods.len()).map(|v| Some(v as f64)).collect();
+            df.push_column(cols::DISEASE_CASES, Column::Float(y))
+                .unwrap();
+        }
+        df
+    }
+
+    /// Splits cut from the shared history forecast as with their own cut history, and the
+    /// forecasts together are bounded.
+    #[test]
+    fn shared_history_splits_are_cut_lazily_and_bounded() {
+        let model = Erased(Last);
+        let trained: Trained = std::sync::Arc::new(());
+        let config = json!({"spread": 1.0});
+        let shared = frame(&["2024-01", "2024-02", "2024-03", "2024-04"], true);
+        let run = RunInfo::with_periods(1);
+        let split = |end: &str, next: &str| Split {
+            history: History::Until(Period::parse(end).unwrap()),
+            future: frame(&[next], false),
+            run: run.clone(),
+        };
+        let splits = [split("2024-02", "2024-03"), split("2024-03", "2024-04")];
+        let got =
+            predict_splits_blocking(&model, &trained, &config, Some(&shared), &splits, None, 100)
+                .unwrap();
+        let own = Split {
+            history: History::Own(frame(&["2024-01", "2024-02"], true)),
+            ..split("2024-02", "2024-03")
+        };
+        let want =
+            predict_splits_blocking(&model, &trained, &config, None, &[own], None, 100).unwrap();
+        assert_eq!(
+            serde_json::to_value(&got[0]).unwrap(),
+            serde_json::to_value(&want[0]).unwrap()
+        );
+        assert_eq!(got[1].f64_column("sample_1").unwrap(), vec![3.0]);
+        // Each forecast is 1 row x 5 columns: two fit 10 cells, not 9.
+        let e = predict_splits_blocking(&model, &trained, &config, Some(&shared), &splits, None, 9)
+            .unwrap_err();
+        assert!(e.message.contains("more than the limit"), "{}", e.message);
+        let early = [split("2023-12", "2024-01")];
+        let e =
+            predict_splits_blocking(&model, &trained, &config, Some(&shared), &early, None, 100)
+                .unwrap_err();
+        assert!(e.message.contains("no rows up to"), "{}", e.message);
+    }
+}

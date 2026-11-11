@@ -22,10 +22,10 @@ import { createContext, Fragment, lazy, Suspense, useContext, useMemo, useState,
 import { api } from './api/client'
 import type { Health, Info } from './api/types'
 import { dismissKeyRequest, setApiKey, useApiKey } from './lib/apikey'
-import { actionCommands, GO_KEY, PLACE_KEYS, withPlaceKeys } from './lib/commands'
+import { actionCommands, placeBinding, withPlaceKeys } from './lib/commands'
 import { useResource } from './lib/resource'
 import { go, useRoute } from './lib/router'
-import { resultRoute, searchService } from './lib/search'
+import { resultRoute, searchRoute, searchService } from './lib/search'
 
 // Each page loads the first time it is opened.
 const ApiPage = lazy(() => import('./pages/ApiPage').then((module) => ({ default: module.ApiPage })))
@@ -36,6 +36,7 @@ const Datasets = lazy(() => import('./pages/Datasets').then((module) => ({ defau
 const Evaluate = lazy(() => import('./pages/Evaluate').then((module) => ({ default: module.Evaluate })))
 const Forecast = lazy(() => import('./pages/Forecast').then((module) => ({ default: module.Forecast })))
 const Jobs = lazy(() => import('./pages/Jobs').then((module) => ({ default: module.Jobs })))
+const SearchPage = lazy(() => import('./pages/SearchPage').then((module) => ({ default: module.SearchPage })))
 const Overview = lazy(() => import('./pages/Overview').then((module) => ({ default: module.Overview })))
 const System = lazy(() => import('./pages/System').then((module) => ({ default: module.System })))
 
@@ -125,14 +126,12 @@ function ApiKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
 /** G then a place's key goes to the place, bound inside the shell so its shortcuts dialog lists them. */
 function PlaceKeys() {
     useShortcuts(
-        PLACES.filter((place) => PLACE_KEYS[place.id] !== undefined).map((place) => ({
-            id: `go-${place.id}`,
-            key: GO_KEY,
-            next: PLACE_KEYS[place.id]!,
-            label: `Go to ${place.label}`,
-            group: 'Go to',
-            run: () => go(place.id === 'overview' ? '/' : `/${place.id}`),
-        })),
+        PLACES.flatMap((place) => {
+            const binding = placeBinding(place.id)
+            return binding === undefined
+                ? []
+                : [{ id: `go-${place.id}`, ...binding, label: `Go to ${place.label}`, group: 'Go to', run: () => go(place.id === 'overview' ? '/' : `/${place.id}`) }]
+        }),
         [],
     )
     return null
@@ -155,7 +154,7 @@ export function App() {
     const { settings, setSettings } = useAppearance()
     const route = useRoute()
     const [first = 'overview', second] = route
-    const page = PLACES.some((place) => place.id === first) ? first : 'missing'
+    const page = first === 'search' || PLACES.some((place) => place.id === first) ? first : 'missing'
     const credentials = useApiKey()
     const [askingKey, setAskingKey] = useState(false)
     const [showingKeys, setShowingKeys] = useState(false)
@@ -197,7 +196,7 @@ export function App() {
     ]
 
     const model = info.data
-    const label = PLACES.find((place) => place.id === page)?.label ?? 'Not found'
+    const label = page === 'search' ? 'Search' : (PLACES.find((place) => place.id === page)?.label ?? 'Not found')
     const trail: Crumb[] = [{ label: model?.display_name ?? 'Model', href: '#/' }]
     if (page !== 'overview') trail.push(second === undefined ? { label } : { label, href: `#/${page}` })
     if (second !== undefined) trail.push({ label: second.length > 12 ? second.slice(-8) : second, code: true })
@@ -213,6 +212,7 @@ export function App() {
     else if (page === 'artifacts') content = <Artifacts opened={second} />
     else if (page === 'system') content = <System />
     else if (page === 'api') content = <ApiPage />
+    else if (page === 'search') content = <SearchPage />
     else
         content = (
             <Empty>
@@ -283,6 +283,12 @@ export function App() {
                                     setSearched('')
                                     openFound(result, group)
                                 }}
+                                onSeeAll={(query) => {
+                                    setSearched('')
+                                    go(searchRoute(query))
+                                }}
+                                // The results page's own field takes / there.
+                                shortcut={page !== 'search'}
                                 words={SEARCH_WORDS}
                             />
                         }

@@ -360,7 +360,7 @@ async fn chap_core_flow() {
     assert!(ex["elapsed_ms"].as_f64().unwrap() >= 0.0);
 
     // Sample data generator, as cdx and the console use it.
-    let (s, sample, _) = call(
+    let (s, sample, h) = call(
         &app,
         "GET",
         "/api/v1/ml/$generate-sample-data?num_locations=2&num_periods=6&seed=1",
@@ -368,6 +368,7 @@ async fn chap_core_flow() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{sample}");
+    assert_eq!(h["content-type"], "application/json");
     assert_eq!(sample["data"]["columns"][2], "disease_cases");
     assert_eq!(sample["data"]["data"].as_array().unwrap().len(), 12);
     let (_, sample2, _) = call(

@@ -72,53 +72,6 @@ struct ListParams {
     q: Option<String>,
 }
 
-/// A small summary of a backtest's or forecast's content, for listing them without it:
-/// `dataset_id`, and for a backtest its `data`, `options` and `aggregate`, for a forecast its
-/// `periods`, `weather`, first period and number of locations. chapkit-rs extension.
-fn summary(data: &Value) -> Option<Value> {
-    let content = data.get("content")?;
-    let pick = |keys: &[&str]| -> serde_json::Map<String, Value> {
-        keys.iter()
-            .filter_map(|k| content.get(*k).map(|v| ((*k).to_owned(), v.clone())))
-            .collect()
-    };
-    match str_field(data, "type")? {
-        crate::analysis::BACKTEST_TYPE => Some(Value::Object(pick(&[
-            "dataset_id",
-            "data",
-            "options",
-            "aggregate",
-        ]))),
-        crate::analysis::FORECAST_TYPE => {
-            let mut out = pick(&["dataset_id", "periods", "weather"]);
-            let rows = content.get("forecasts").and_then(Value::as_array);
-            let first = rows
-                .and_then(|r| r.first())
-                .and_then(|r| r.get("time_period"))
-                .cloned();
-            let locations = rows.map(|r| {
-                r.iter()
-                    .filter_map(|row| row.get("location").and_then(Value::as_str))
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-            });
-            out.insert("first_period".into(), first.unwrap_or(Value::Null));
-            out.insert("locations".into(), locations.into());
-            Some(Value::Object(out))
-        }
-        _ => None,
-    }
-}
-
-/// The artifact as listed: `data` without `content`, with its [`summary`] when it has one.
-fn listed(row: chapkit_store::ArtifactRow) -> ArtifactOut {
-    let mut data = without_content(&row.data);
-    if let (Some(summary), Value::Object(m)) = (summary(&row.data), &mut data) {
-        m.insert("summary".into(), summary);
-    }
-    ArtifactOut { data, ..row.into() }
-}
-
 /// List artifact summaries (`data` without `content`), optionally of one `type`, oldest or newest
 /// first. Backtests and forecasts carry `data.summary`, enough to list them without their content.
 /// With `type`, `q` keeps those made from a dataset whose name holds it.
@@ -163,20 +116,17 @@ async fn list(
             Some(rows.into_iter().map(|d| d.id).collect::<Vec<_>>())
         }
     };
+    // Listings are stored beside the artifacts (`chapkit_store::summary`): neither listing nor
+    // filtering reads or parses their content.
     let read = |page: Option<Page>| {
         let store = s.store();
         let kind = p.kind.clone();
         let datasets = datasets.clone();
         async move {
-            match kind.as_deref() {
-                Some(kind) => {
-                    store
-                        .list_artifacts_of_type(kind, datasets.as_deref(), page)
-                        .await
-                }
-                None => store.list_artifacts(page).await,
-            }
-            .map_err(store_problem)
+            store
+                .list_artifact_summaries(kind.as_deref(), datasets.as_deref(), page)
+                .await
+                .map_err(store_problem)
         }
     };
     let page = paging.map(|(page, size)| Page {
@@ -208,7 +158,7 @@ async fn list(
     if newest_first {
         rows.reverse();
     }
-    let items: Vec<ArtifactOut> = rows.into_iter().map(listed).collect();
+    let items: Vec<ArtifactOut> = rows.into_iter().map(Into::into).collect();
     Ok(ListOrPage::new(items, total, paging))
 }
 

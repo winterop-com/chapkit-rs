@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use chapkit_core::{DataFrame, Error, Period, Result, cols};
 use rayon::prelude::*;
 
+use crate::budget;
 use crate::mask::{MASK_INDICATOR, check_mask_outside_window};
 use crate::prepare::{Prepare, prepare};
 use crate::weather::{WeatherProvider, masked_future};
@@ -93,31 +94,68 @@ pub fn retrain_points(splits: usize, retrain: usize) -> Vec<usize> {
     points
 }
 
-/// The most rows the splits of [`train_test_splits`] hold together (every split's history and
-/// window, which are built at once): more splits over a larger dataset are refused before any is
-/// built. 100,000 locations of ten years of monthly data with 7 splits make about 82 million.
+/// The most memory the splits of [`train_test_splits`] take together, built at once: the first
+/// training set, and per split its history, truth and generated future (every location with
+/// history times the window's periods, which without filling can be far more rows than the data
+/// has), each row at its columns' width. More splits over a larger dataset are refused before any is
+/// built. 100,000 locations x 120 months x 5 covariates with chap-core's 7 splits take about 12 GB;
+/// 32 GiB leaves room for wider data.
+pub const MAX_SPLIT_BYTES: u64 = 32 << 30;
+
+/// The most rows the splits hold together, counted as for [`MAX_SPLIT_BYTES`]: 100,000 locations of
+/// ten years of monthly data with 7 splits hold about 100 million.
 pub const MAX_SPLIT_ROWS: usize = 250_000_000;
 
-/// The rows the splits hold together: split `i` has every row up to its window's last period.
-fn split_rows(panel: &Panel, split_idx: usize, options: &Options) -> usize {
-    let mut per_period = vec![0usize; panel.periods.len()];
+/// The rows and bytes the splits take together (see [`MAX_SPLIT_BYTES`]).
+fn split_size(
+    data: &DataFrame,
+    panel: &Panel,
+    split_idx: usize,
+    options: &Options,
+) -> Result<(usize, u64)> {
+    let n = panel.periods.len();
+    // Rows, and locations seen, up to each period.
+    let mut rows_at = vec![0usize; n];
     for &p in &panel.row_period {
-        if let Some(c) = per_period.get_mut(p) {
+        if let Some(c) = rows_at.get_mut(p) {
             *c += 1;
         }
     }
-    let mut up_to = Vec::with_capacity(per_period.len());
-    let mut sum = 0usize;
-    for c in per_period {
-        sum += c;
-        up_to.push(sum);
+    let mut locations_at = vec![0usize; n];
+    for (_, idx) in data.group_indices(cols::LOCATION)? {
+        let first = idx.iter().filter_map(|&r| panel.row_period.get(r)).min();
+        if let Some(c) = first.and_then(|&p| locations_at.get_mut(p)) {
+            *c += 1;
+        }
     }
-    (0..options.splits)
-        .map(|i| {
-            let end = split_idx + i * options.stride + options.periods;
-            up_to.get(end).copied().unwrap_or(sum)
-        })
-        .fold(0usize, usize::saturating_add)
+    let cumulative = |v: Vec<usize>| -> Vec<usize> {
+        v.into_iter()
+            .scan(0usize, |sum, c| {
+                *sum = sum.saturating_add(c);
+                Some(*sum)
+            })
+            .collect()
+    };
+    let (rows_to, locations_to) = (cumulative(rows_at), cumulative(locations_at));
+    let up_to = |v: &[usize], p: usize| v.get(p).or(v.last()).copied().unwrap_or(0);
+    let width = budget::row_bytes(data);
+    // A taken row also has its index while taken, and a history row its period.
+    let taken = width.saturating_add(budget::size::<usize>());
+    let historic = taken.saturating_add(budget::size::<Period>());
+    let train = up_to(&rows_to, split_idx);
+    let (mut rows, mut total) = (train, budget::times(train, taken));
+    for i in 0..options.splits {
+        let last = split_idx.saturating_add(i.saturating_mul(options.stride));
+        let held = up_to(&rows_to, last);
+        let window_end = up_to(&rows_to, last.saturating_add(options.periods));
+        let future = up_to(&locations_to, last).saturating_mul(options.periods);
+        rows = rows.saturating_add(window_end).saturating_add(future);
+        total = total
+            .saturating_add(budget::times(held, historic))
+            .saturating_add(budget::times(window_end.saturating_sub(held), taken))
+            .saturating_add(budget::times(future, width));
+    }
+    Ok((rows, total))
 }
 
 /// One test window.
@@ -254,14 +292,20 @@ pub fn train_test_splits(
         (None, panel, Vec::new())
     };
     let data = kept.as_ref().unwrap_or(data);
-    let held = split_rows(&panel, split_idx, options);
+    let (held, bytes) = split_size(data, &panel, split_idx, options)?;
     if held > MAX_SPLIT_ROWS {
         return Err(Error::invalid(format!(
-            "{} splits would hold {held} rows together, more than the limit of {MAX_SPLIT_ROWS}; \
-             use fewer splits or less data",
+            "{} splits would hold {held} rows together (history, truth and future each), more than \
+             the limit of {MAX_SPLIT_ROWS}; use fewer splits or less data",
             options.splits
         )));
     }
+    budget::check(
+        &format!("{} splits (history, truth and future each)", options.splits),
+        bytes,
+        MAX_SPLIT_BYTES,
+        "use fewer splits or less data",
+    )?;
     let label = |i: usize| panel.labels.get(i).cloned().unwrap_or_default();
     let (train, _) = rows(data, &panel, |p| p <= split_idx)?;
     let splits = (0..options.splits)
@@ -435,6 +479,120 @@ mod tests {
             .to_string();
         assert!(e.contains("more than the limit"), "{e}");
         assert_eq!(retrain_points(usize::MAX, 3)[2], usize::MAX / 3 * 2);
+    }
+
+    /// The review's case, scaled down: many locations seen once at the start and one running on,
+    /// without filling or padding. The futures are rectangular (every location with history x the
+    /// window), far more rows than the dataset has.
+    fn sparse_long_tail(locations: usize) -> DataFrame {
+        let mut tp = vec!["2000-01".to_owned(); locations];
+        let mut loc: Vec<String> = (0..locations).map(|i| format!("L{i}")).collect();
+        let mut p = Period::parse("2000-01").unwrap();
+        for _ in 0..129 {
+            p = p.succ().unwrap();
+            tp.push(p.to_string());
+            loc.push("L0".into());
+        }
+        let n = tp.len();
+        let mut data = DataFrame::new();
+        data.push_column(
+            cols::TIME_PERIOD,
+            chapkit_core::Column::from_strs(tp.iter().map(String::as_str)),
+        )
+        .unwrap();
+        data.push_column(
+            cols::LOCATION,
+            chapkit_core::Column::from_strs(loc.iter().map(String::as_str)),
+        )
+        .unwrap();
+        data.push_column(
+            cols::DISEASE_CASES,
+            chapkit_core::Column::Float(vec![Some(1.0); n]),
+        )
+        .unwrap();
+        data.push_column("rainfall", chapkit_core::Column::Float(vec![Some(1.0); n]))
+            .unwrap();
+        data
+    }
+
+    const SPARSE: Options = Options {
+        periods: 100,
+        splits: 30,
+        stride: 1,
+        retrain: 1,
+        prepare: Prepare {
+            fill_gaps: false,
+            pad: false,
+        },
+        drop_untrained: true,
+    };
+
+    /// The estimate covers what is built: the training set, and every split's history, truth and
+    /// generated future, at their widths.
+    #[test]
+    fn split_bytes_cover_futures() {
+        use crate::weather::Climatology;
+        let data = sparse_long_tail(200);
+        let built = train_test_splits(&data, &SPARSE, &Climatology).unwrap();
+        let held = built
+            .splits
+            .iter()
+            .flat_map(|s| [&s.historic, &s.truth, &s.future])
+            .chain([&built.train])
+            .map(|f| budget::times(f.n_rows(), budget::row_bytes(f)))
+            .fold(0, u64::saturating_add);
+        let panel = Panel::new(&data, false).unwrap();
+        let (rows, counted) = split_size(&data, &panel, 0, &SPARSE).unwrap();
+        assert!(counted >= held, "counted {counted} bytes, built {held}");
+        assert!(counted < held * 2, "counted {counted} bytes, built {held}");
+        assert!(rows >= 30 * 201 * 100, "{rows}");
+        // The review's case: 100,000 locations make 30 futures of 10 million rows each; refused
+        // before any is built.
+        let big = sparse_long_tail(100_000);
+        let e = train_test_splits(&big, &SPARSE, &Climatology)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("rows together"), "{e}");
+    }
+
+    /// 100,000 locations x 120 months x 5 covariates with the default 7 splits fit both budgets:
+    /// measured on 100 locations, the size grows linearly with them.
+    #[test]
+    fn realistic_splits_fit() {
+        let mut p = Period::parse("2010-01").unwrap();
+        let mut periods = vec![];
+        for _ in 0..120 {
+            periods.push(p.to_string());
+            p = p.succ().unwrap();
+        }
+        let n = 100 * 120;
+        let mut data = DataFrame::new();
+        data.push_column(
+            cols::TIME_PERIOD,
+            chapkit_core::Column::from_strs(
+                (0..100).flat_map(|_| periods.iter().map(String::as_str)),
+            ),
+        )
+        .unwrap();
+        let locs: Vec<String> = (0..100).map(|i| format!("L{i}")).collect();
+        data.push_column(
+            cols::LOCATION,
+            chapkit_core::Column::from_strs(
+                locs.iter()
+                    .flat_map(|l| std::iter::repeat_n(l.as_str(), 120)),
+            ),
+        )
+        .unwrap();
+        for name in [cols::DISEASE_CASES, "a", "b", "c", "d", "e"] {
+            data.push_column(name, chapkit_core::Column::Float(vec![Some(1.0); n]))
+                .unwrap();
+        }
+        let o = Options::default();
+        let panel = Panel::new(&data, true).unwrap();
+        let split_idx = 120 - (o.window().unwrap() + 1);
+        let (rows, bytes) = split_size(&data, &panel, split_idx, &o).unwrap();
+        assert!(rows * 1000 < MAX_SPLIT_ROWS / 2, "{rows}");
+        assert!(bytes * 1000 < MAX_SPLIT_BYTES / 2, "{bytes}");
     }
 
     #[test]

@@ -8,6 +8,9 @@
 //! - configs: `{id, name, data, tags, created_at, updated_at}`
 //! - artifacts: a tree (`parent_id`, `level`) of JSON `data`, plus an optional binary
 //!   `content` blob (for example a safetensors checkpoint) kept out of the JSON
+//!   and a listing (`data` without `content`, plus a [`summary`] for backtests and forecasts) with
+//!   the filterable `type` and `content.dataset_id`, written beside each artifact so listing and
+//!   filtering never read or parse `data`. Databases from before listings get them on open.
 //! - links from a config to the root artifacts trained with it
 //! - datasets (a chapkit-rs extension): a summary as JSON `meta`, and the data as a blob
 
@@ -128,11 +131,13 @@ pub trait Store: Send + Sync + 'static {
     async fn artifact_content(&self, id: &str) -> StoreResult<Option<Vec<u8>>>;
     /// Artifacts ordered by id, optionally paged, with the total count.
     async fn list_artifacts(&self, page: Option<Page>) -> StoreResult<(Vec<ArtifactRow>, u64)>;
-    /// Artifacts whose `data.type` is `kind`, ordered by id, optionally only those whose
-    /// `data.content.dataset_id` is one of `datasets`, optionally paged, with their count.
-    async fn list_artifacts_of_type(
+    /// Artifact listings ordered by id: `data` is the artifact's without `content`, with
+    /// `summary` ([`summary`]) when it has one. Optionally only those whose `data.type` is `kind`
+    /// and, with it, whose `data.content.dataset_id` is one of `datasets`; optionally paged; with
+    /// the count of those kept. Reads neither `data` nor `content`.
+    async fn list_artifact_summaries(
         &self,
-        kind: &str,
+        kind: Option<&str>,
         datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)>;
@@ -188,19 +193,105 @@ pub(crate) fn name_filter(name: Option<&str>) -> (String, Vec<String>) {
     }
 }
 
-/// The `WHERE` clause and its parameters for artifacts of a type, and with `datasets` only
-/// those made from one of them (`data.content.dataset_id`). `datasets` must not be empty.
-pub(crate) fn type_filter(kind: &str, datasets: Option<&[String]>) -> (String, Vec<String>) {
-    let mut sql = " WHERE json_extract(data, '$.type') = ?1".to_owned();
+/// The `WHERE` clause (with a leading space, or empty) and its parameters for listings of a type,
+/// and with `datasets` only those made from one of them. `datasets` must not be empty.
+pub(crate) fn type_filter(
+    kind: Option<&str>,
+    datasets: Option<&[String]>,
+) -> (String, Vec<String>) {
+    let Some(kind) = kind else {
+        return (String::new(), Vec::new());
+    };
+    let mut sql = " WHERE l.kind = ?1".to_owned();
     let mut params = vec![kind.to_owned()];
     if let Some(ids) = datasets {
         let marks: Vec<String> = (2..ids.len() + 2).map(|i| format!("?{i}")).collect();
-        sql.push_str(" AND json_extract(data, '$.content.dataset_id') IN (");
+        sql.push_str(" AND l.dataset_id IN (");
         sql.push_str(&marks.join(", "));
         sql.push(')');
         params.extend(ids.iter().cloned());
     }
     (sql, params)
+}
+
+/// The listing of a backtest or forecast carries this summary of its content, enough to list it
+/// without it: `dataset_id`, and for a backtest (`ml_backtest`) its `data`, `options` and
+/// `aggregate`, for a forecast (`ml_forecast`) its `periods`, `weather`, first period and number
+/// of locations. Other artifacts have none.
+pub fn summary(data: &Value) -> Option<Value> {
+    let content = data.get("content")?;
+    let pick = |keys: &[&str]| -> serde_json::Map<String, Value> {
+        keys.iter()
+            .filter_map(|k| content.get(*k).map(|v| ((*k).to_owned(), v.clone())))
+            .collect()
+    };
+    match data.get("type").and_then(Value::as_str)? {
+        "ml_backtest" => Some(Value::Object(pick(&[
+            "dataset_id",
+            "data",
+            "options",
+            "aggregate",
+        ]))),
+        "ml_forecast" => {
+            let mut out = pick(&["dataset_id", "periods", "weather"]);
+            let rows = content.get("forecasts").and_then(Value::as_array);
+            let first = rows
+                .and_then(|r| r.first())
+                .and_then(|r| r.get("time_period"))
+                .cloned();
+            let locations = rows.map(|r| {
+                r.iter()
+                    .filter_map(|row| row.get("location").and_then(Value::as_str))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+            });
+            out.insert("first_period".into(), first.unwrap_or(Value::Null));
+            out.insert("locations".into(), locations.into());
+            Some(Value::Object(out))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a listing should carry a [`summary`] but does not (a backtest or forecast written
+/// without one): the listing is then made again from the artifact's data, once.
+pub(crate) fn lacks_summary(listing: &Value) -> bool {
+    matches!(
+        listing.get("type").and_then(Value::as_str),
+        Some("ml_backtest" | "ml_forecast")
+    ) && listing.get("summary").is_none()
+}
+
+/// What a listing row stores for `data`: its `type`, its `content.dataset_id`, and the listing
+/// itself (`data` without `content`, with its [`summary`]) as JSON text.
+pub(crate) struct Listing {
+    pub kind: Option<String>,
+    pub dataset_id: Option<String>,
+    pub text: String,
+}
+
+impl Listing {
+    pub(crate) fn of(data: &Value) -> StoreResult<Self> {
+        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
+        let mut listing = match data {
+            Value::Object(m) => Value::Object(
+                m.iter()
+                    .filter(|(k, _)| *k != "content")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+            other => other.clone(),
+        };
+        if let (Some(summary), Value::Object(m)) = (summary(data), &mut listing) {
+            m.insert("summary".into(), summary);
+        }
+        Ok(Self {
+            kind: text(data.get("type")),
+            dataset_id: text(data.pointer("/content/dataset_id")),
+            text: serde_json::to_string(&listing)
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+        })
+    }
 }
 
 /// Open a store from a database URL.

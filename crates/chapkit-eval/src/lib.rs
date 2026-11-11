@@ -20,6 +20,7 @@
 
 mod ahead;
 mod backtest;
+mod budget;
 pub mod mask;
 pub mod metrics;
 pub mod prepare;

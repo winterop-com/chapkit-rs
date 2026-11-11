@@ -111,10 +111,14 @@ gives chap-core's forecasts only with filling on.
 `chapkit::eval::prepare` is the step on its own; a backtest runs it before splitting. Sunday-start weeks
 cannot be filled or padded yet, and data mixing monthly and weekly periods is an error.
 
-Two limits keep a request from exhausting memory; both are checked before anything is allocated. The
-prepared dataset holds at most 60 million rows (`MAX_PREPARED_ROWS`; 100,000 locations of ten years of
-weekly data fit), and the splits, built at once, hold at most 250 million rows together
-(`MAX_SPLIT_ROWS`; 100,000 locations of ten years of monthly data with 7 splits hold about 82 million).
+Limits keep a request from exhausting memory; all are checked before anything is allocated, with
+memory estimated from the rows times their columns' widths (16 bytes a number, 4 a text code). The
+prepared dataset holds at most 60 million rows (`MAX_PREPARED_ROWS`) and 16 GiB (`MAX_PREPARED_BYTES`):
+100,000 locations of ten years take about 1.9 GB monthly and 8 GB weekly with six numeric columns. The
+splits, built at once (the first training set, and per split its history, truth and generated future,
+which is every location with history times the window, however sparse the data), hold at most 250
+million rows (`MAX_SPLIT_ROWS`) and 32 GiB (`MAX_SPLIT_BYTES`) together: 100,000 locations of ten years
+of monthly data with five covariates and 7 splits hold about 100 million rows and 12 GB.
 
 **Untrained locations**, as chap-core's REST backtest (`validate_and_filter_dataset_for_evaluation`, after
 preparation and masking): a location with no observed target before the test windows (in the first

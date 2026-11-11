@@ -34,6 +34,19 @@ function records(frames: readonly Frame[]): Row[] {
     )
 }
 
+/** What the dataset's chart draws: the target over time, a line per location chosen, in the order chosen. */
+export function datasetSpec(rows: readonly Row[], target: string, chosen: readonly string[]) {
+    return {
+        rows: rows.map((row) => ({ period: String(row.time_period), location: String(row.location), value: row[target] ?? null })),
+        x: 'period',
+        y: 'value',
+        series: 'location',
+        order: [...new Set(rows.map((row) => String(row.time_period)))],
+        seriesOrder: [...chosen],
+        fieldNames: { period: 'Period', location: 'Location', value: target },
+    }
+}
+
 /**
  * One dataset: its facts, its target over time for the locations chosen, and its rows. Mounted
  * afresh for each dataset (the app keys pages by route), so a choice of locations never carries over.
@@ -55,18 +68,7 @@ export function DatasetPage({ id }: { id: string }) {
     )
     const rows = useMemo(() => records(frames.data === undefined ? [] : [frames.data]), [frames.data])
     const target = meta?.target ?? 'disease_cases'
-    const spec = useMemo(
-        () => ({
-            rows: rows.map((row) => ({ period: String(row.time_period), location: String(row.location), value: row[target] ?? null })),
-            x: 'period',
-            y: 'value',
-            series: 'location',
-            order: [...new Set(rows.map((row) => String(row.time_period)))],
-            seriesOrder: chosen,
-            fieldNames: { period: 'Period', location: 'Location', value: target },
-        }),
-        [rows, target, chosen],
-    )
+    const spec = useMemo(() => datasetSpec(rows, target, chosen), [rows, target, chosen])
     const legend = useMemo(() => chartLegend('line', spec), [spec])
     const columns: DataColumn<Row>[] = useMemo(
         () =>

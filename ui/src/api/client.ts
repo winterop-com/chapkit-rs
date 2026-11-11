@@ -1,4 +1,4 @@
-import { apiKey, keyRefused } from '../lib/apikey'
+import { apiKey, keyRefused, keyVersion } from '../lib/apikey'
 import type {
     Artifact,
     ArtifactNode,
@@ -38,9 +38,13 @@ export const asApiError = (failure: unknown): ApiError =>
 /** A read stopped because nothing waits for it any more: never shown. */
 export const aborted = (failure: unknown): boolean => failure instanceof DOMException && failure.name === 'AbortError'
 
-/** Sends a request with the API key, if one is given; a 401 asks the person for one. */
+/**
+ * Sends a request with the API key, if one is given; a 401 asks the person for one, unless another
+ * key was given while the request was out or nothing waits for the answer any more.
+ */
 async function send(path: string, init?: RequestInit, accept = 'application/json'): Promise<Response> {
     const key = apiKey()
+    const version = keyVersion()
     let response: Response
     try {
         response = await fetch(path, {
@@ -51,7 +55,7 @@ async function send(path: string, init?: RequestInit, accept = 'application/json
         if (aborted(error)) throw error
         throw new ApiError('unreachable', 'The service does not answer', String(error))
     }
-    if (response.status === 401) keyRefused()
+    if (response.status === 401 && init?.signal?.aborted !== true) keyRefused(version)
     return response
 }
 
@@ -174,7 +178,8 @@ export const api = {
 
     configs: async (signal?: Signal) => items(await request<Config[] | { items: Config[] }>(`${BASE}/configs`, { signal })),
     /** A page of the configs whose name holds `q`. */
-    findConfigs: (q: string, size: number, signal?: Signal) => request<Page<Config>>(`${BASE}/configs${query({ q, page: 1, size })}`, { signal }),
+    findConfigs: (q: string, page: number, size: number, signal?: Signal) => request<Page<Config>>(`${BASE}/configs${query({ q, page, size })}`, { signal }),
+    config: (id: string, signal?: Signal) => request<Config>(`${BASE}/configs/${id}`, { signal }),
     configSchema: (signal?: Signal) => request<Record<string, unknown>>(`${BASE}/configs/$schema`, { signal }),
     createConfig: (name: string, data: unknown) => request<Config>(`${BASE}/configs`, json('POST', { name, data })),
     deleteConfig: (id: string) => request<void>(`${BASE}/configs/${id}`, { method: 'DELETE' }),
@@ -205,7 +210,7 @@ export const api = {
 
     datasets: async (signal?: Signal) => items(await request<Dataset[] | { items: Dataset[] }>(`${BASE}/datasets`, { signal })),
     /** A page of the datasets whose name holds `q`. */
-    findDatasets: (q: string, size: number, signal?: Signal) => request<Page<Dataset>>(`${BASE}/datasets${query({ q, page: 1, size })}`, { signal }),
+    findDatasets: (q: string, page: number, size: number, signal?: Signal) => request<Page<Dataset>>(`${BASE}/datasets${query({ q, page, size })}`, { signal }),
     dataset: (id: string, signal?: Signal) => request<Dataset>(`${BASE}/datasets/${id}`, { signal }),
     /** A stored dataset's rows, its periods as chapkit writes them and in period order. */
     datasetData: (id: string, what: DataProjection = {}, signal?: Signal) =>

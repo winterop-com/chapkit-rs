@@ -2,9 +2,11 @@ import { DataTable, type DataColumn } from '@winterop-com/sokkel-ui/DataTable'
 import { DescriptionList } from '@winterop-com/sokkel-ui/DescriptionList'
 import { useCommands } from '@winterop-com/sokkel-ui/hooks/use-commands'
 import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
-import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
+import { bindingKeys } from '@winterop-com/sokkel-ui/lib/keys'
 import { ConfirmDialog, DialogShell } from '@winterop-com/sokkel-ui/DialogShell'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
+import { PageState } from '@winterop-com/sokkel-ui/PageState'
+import { Section } from '@winterop-com/sokkel-ui/Section'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { SchemaForm, SchemaIssueCount, useSchemaForm } from '@winterop-com/sokkel-ui/schema/SchemaForm'
 import { TextField } from '@winterop-com/sokkel-ui/TextField'
@@ -79,8 +81,71 @@ function NewConfig({ schema, onClose, onSaved }: { schema: Record<string, unknow
     )
 }
 
-/** Configs: the named option sets, made from the model's schema. */
+/** A config's options as rows of terms, its id first. */
+const optionItems = (config: Config) => [
+    { term: 'Id', value: config.id, code: true },
+    ...Object.entries(config.data).map(([key, value]) => ({ term: key, value: said(value), code: true })),
+]
+
+/** One config: its options, and the ways to use or delete it. Where a search's config result opens. */
+function ConfigView({ id }: { id: string }) {
+    const config = useResource((signal) => api.config(id, signal), [id])
+    const [removing, setRemoving] = useState(false)
+    const found = config.data
+    const remove = (doomed: Config) =>
+        api.deleteConfig(doomed.id).then(
+            () => {
+                toast.add({ title: `${doomed.name} deleted` })
+                go('/configs')
+            },
+            (failure: Error) => toast.add({ type: 'error', title: 'Could not delete the config', description: failure.message }),
+        )
+    return (
+        <PageState loading={config.loading} error={config.error?.detail ?? config.error?.message} status={config.error?.status} onRetry={config.reload}>
+            {found && (
+                <div className="flex flex-col gap-6">
+                    <PageHeader
+                        title={found.name}
+                        code={found.id}
+                        onBack={() => go('/configs')}
+                        meta={`Created ${when(found.created_at)}`}
+                        actions={
+                            <>
+                                <Button variant="outline" size="sm" onClick={() => setRemoving(true)}>
+                                    Delete
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={() => go(`/forecast?config=${found.id}`)}>
+                                    Forecast
+                                </Button>
+                                <Button size="sm" onClick={() => go(`/evaluate?config=${found.id}`)}>
+                                    Evaluate
+                                </Button>
+                            </>
+                        }
+                    />
+                    <Section title="Options" meta={Object.keys(found.data).length === 0 ? 'Model defaults' : undefined}>
+                        <DescriptionList termWidth="14rem" items={optionItems(found)} />
+                    </Section>
+                    <ConfirmDialog
+                        open={removing}
+                        onOpenChange={setRemoving}
+                        question={`Delete ${found.name}?`}
+                        detail="Evaluations and forecasts made with it are kept."
+                        confirm={{ label: 'Delete', destructive: true, onConfirm: () => void remove(found) }}
+                    />
+                </div>
+            )}
+        </PageState>
+    )
+}
+
+/** Configs: the named option sets, made from the model's schema; one config at `#/configs/{id}`. */
 export function Configs({ opened }: { opened?: string }) {
+    if (opened !== undefined) return <ConfigView id={opened} />
+    return <ConfigList />
+}
+
+function ConfigList() {
     const configs = useResource(api.configs, [])
     const schema = useResource(api.configSchema, [])
     // `#/configs?new` (the palette's New config from another page) opens the form.
@@ -90,7 +155,7 @@ export function Configs({ opened }: { opened?: string }) {
         if (hashParam('new') !== undefined) go('/configs')
     }
     useShortcuts([{ id: NEW_CONFIG, key: 'n', label: 'New config', group: 'Configs', run: () => setCreating(true) }], [])
-    useCommands([{ title: ACTIONS, rank: 10, commands: [{ id: NEW_CONFIG, label: 'New config', icon: Plus, keys: keyLabels({ key: 'n' }), onSelect: () => setCreating(true) }] }], [])
+    useCommands([{ title: ACTIONS, rank: 10, commands: [{ id: NEW_CONFIG, label: 'New config', icon: Plus, ...bindingKeys({ key: 'n' }), onSelect: () => setCreating(true) }] }], [])
     const [removing, setRemoving] = useState<Config | null>(null)
     const remove = (config: Config) =>
         api.deleteConfig(config.id).then(
@@ -127,17 +192,11 @@ export function Configs({ opened }: { opened?: string }) {
                 loading={configs.loading}
                 defaultSort={{ column: 'created', direction: 'desc' }}
                 minWidth="40rem"
-                defaultExpanded={opened === undefined ? undefined : new Set([opened])}
-                detail={(row) => (
-                    <DescriptionList
-                        termWidth="14rem"
-                        items={[
-                            { term: 'Id', value: row.id, code: true },
-                            ...Object.entries(row.data).map(([key, value]) => ({ term: key, value: said(value), code: true })),
-                        ]}
-                    />
-                )}
-                rowActions={(row) => [{ id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) }]}
+                detail={(row) => <DescriptionList termWidth="14rem" items={optionItems(row)} />}
+                rowActions={(row) => [
+                    { id: 'open', label: 'Open', onSelect: () => go(`/configs/${row.id}`) },
+                    { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
+                ]}
                 empty="No config yet. Evaluations and forecasts use the model defaults until you make one."
             />}
             {creating && schema.data && (

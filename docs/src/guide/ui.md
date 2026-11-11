@@ -93,7 +93,10 @@ frame}`, `frame` being the model's prediction frame.
 The search in the top bar finds datasets and configs by name, and evaluations and forecasts by the
 name of the dataset they were made from: a few of each, newest runs first, with how many match in
 all. It asks the service with `q` (case-insensitive for ASCII letters), so a large list is never
-downloaded. The command palette goes to every page, runs the actions (upload a dataset, new
+downloaded. Its list ends in See all, the results page (`#/search?q=laos`): every match, 25 of each
+kind at a time with More, narrowed by kind, the query kept in the address so Back from a result
+returns to it. A config found opens on its own page (`#/configs/{id}`), its options with ways to
+evaluate or forecast with it. The command palette goes to every page, runs the actions (upload a dataset, new
 evaluation, forecast or config, set or change the API key, light, dark or system scheme, the
 shortcuts) and lists the same search's results under them.
 

@@ -20,7 +20,11 @@ test('the palette shows G then each place\'s key, and leaves other commands alon
             ],
         },
     ])
-    expect(group!.commands.map((command) => command.keys)).toEqual([['G', 'D'], undefined])
+    // A sequence: G, let go, then D; drawn as G then D, never as one chord.
+    expect(group!.commands.map((command) => [command.keys, command.next])).toEqual([
+        [['G'], ['D']],
+        [undefined, undefined],
+    ])
 })
 
 test('the actions go to their pages, ask for the key and show the shortcuts', () => {

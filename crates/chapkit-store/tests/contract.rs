@@ -158,7 +158,7 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
         s.insert_artifact(a).await.unwrap();
     }
     let (rows, total) = s
-        .list_artifacts_of_type("ml_backtest", None, None)
+        .list_artifact_summaries(Some("ml_backtest"), None, None)
         .await
         .unwrap();
     assert_eq!(total, 2);
@@ -167,8 +167,8 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
         ["T1", "T3"]
     );
     let (rows, total) = s
-        .list_artifacts_of_type(
-            "ml_backtest",
+        .list_artifact_summaries(
+            Some("ml_backtest"),
             None,
             Some(Page {
                 offset: 1,
@@ -179,7 +179,7 @@ async fn datasets_crud_and_artifact_types(s: Arc<dyn Store>) {
         .unwrap();
     assert_eq!((rows.len(), total, rows[0].id.as_str()), (1, 2, "T3"));
     assert_eq!(
-        s.list_artifacts_of_type("nope", None, None)
+        s.list_artifact_summaries(Some("nope"), None, None)
             .await
             .unwrap()
             .1,
@@ -230,14 +230,14 @@ async fn lists_filter_by_name_and_dataset(s: Arc<dyn Store>) {
     }
     let ids = ["01A".to_owned(), "01C".to_owned()];
     let (rows, total) = s
-        .list_artifacts_of_type("ml_backtest", Some(&ids), None)
+        .list_artifact_summaries(Some("ml_backtest"), Some(&ids), None)
         .await
         .unwrap();
     assert_eq!(total, 2);
     assert_eq!(names(rows.into_iter().map(|r| r.id).collect()), "T1,T4");
     let none: [String; 0] = [];
     assert_eq!(
-        s.list_artifacts_of_type("ml_backtest", Some(&none), None)
+        s.list_artifact_summaries(Some("ml_backtest"), Some(&none), None)
             .await
             .unwrap()
             .1,
@@ -245,16 +245,138 @@ async fn lists_filter_by_name_and_dataset(s: Arc<dyn Store>) {
     );
 }
 
-async fn suite(s: impl Fn() -> Arc<dyn Store>) {
-    configs_crud_and_conflict(s()).await;
-    lists_filter_by_name_and_dataset(s()).await;
-    artifact_tree_links_and_cascade(s()).await;
-    datasets_crud_and_artifact_types(s()).await;
+/// A backtest and a forecast as the service stores them, with content to leave out of listings.
+fn results() -> [NewArtifact; 2] {
+    let mut backtest = art("R1", None);
+    backtest.data = json!({
+        "type": "ml_backtest", "name": "b",
+        "content": {"dataset_id": "D1", "data": {"rows": 3}, "options": {"splits": 2},
+                    "aggregate": {"crps": 1.5}, "forecasts": [[1, 2, 3]]}
+    });
+    let mut forecast = art("R2", Some("R1"));
+    forecast.data = json!({
+        "type": "ml_forecast",
+        "content": {"dataset_id": "D2", "periods": 3, "weather": "climatology",
+                    "forecasts": [{"time_period": "2024-01", "location": "A"},
+                                  {"time_period": "2024-01", "location": "B"},
+                                  {"time_period": "2024-02", "location": "A"}]}
+    });
+    [backtest, forecast]
+}
+
+/// Listings carry `data` without `content`, plus summaries; they follow updates and deletes.
+async fn listings_carry_summaries_not_content(s: Arc<dyn Store>) {
+    for a in results() {
+        s.insert_artifact(a).await.unwrap();
+    }
+    let (rows, total) = s.list_artifact_summaries(None, None, None).await.unwrap();
+    assert_eq!(total, 2);
+    assert!(rows.iter().all(|r| r.data.get("content").is_none()));
+    assert_eq!(
+        rows[0].data["summary"],
+        json!({"dataset_id": "D1", "data": {"rows": 3}, "options": {"splits": 2}, "aggregate": {"crps": 1.5}})
+    );
+    assert_eq!(rows[0].data["name"], "b");
+    assert_eq!(
+        rows[1].data["summary"],
+        json!({"dataset_id": "D2", "periods": 3, "weather": "climatology",
+               "first_period": "2024-01", "locations": 2})
+    );
+    assert_eq!(
+        (rows[1].parent_id.as_deref(), rows[1].level),
+        (Some("R1"), 1)
+    );
+    let d2 = ["D2".to_owned()];
+    assert_eq!(
+        s.list_artifact_summaries(Some("ml_forecast"), Some(&d2), None)
+            .await
+            .unwrap()
+            .1,
+        1
+    );
+    s.update_artifact(
+        "R2",
+        json!({"type": "ml_backtest", "content": {"dataset_id": "D2"}}),
+        vec!["t".into()],
+        "2026-02-01T00:00:00".into(),
+    )
+    .await
+    .unwrap();
+    let (rows, total) = s
+        .list_artifact_summaries(Some("ml_backtest"), Some(&d2), None)
+        .await
+        .unwrap();
+    assert_eq!((total, rows[0].id.as_str()), (1, "R2"));
+    assert_eq!(rows[0].tags, ["t"]);
+    assert_eq!(rows[0].updated_at, "2026-02-01T00:00:00");
+    assert_eq!(rows[0].data["summary"], json!({"dataset_id": "D2"}));
+    assert!(s.delete_artifact("R1").await.unwrap());
+    let (rows, total) = s.list_artifact_summaries(None, None, None).await.unwrap();
+    assert_eq!((total, rows[0].parent_id.as_deref()), (1, None));
+}
+
+/// The artifacts table as chapkit-rs 0.6.0 wrote it, before listings.
+const OLD_SCHEMA: &str = "CREATE TABLE artifacts (
+    id TEXT PRIMARY KEY, parent_id TEXT, level INTEGER NOT NULL, data TEXT NOT NULL, content BLOB,
+    tags TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)";
+
+/// A database written the old way, with `exec` (the backend's own driver), lists its backtests and
+/// forecasts with summaries and filters them by type and dataset once opened; a listing that lost
+/// its summary gets it back from the artifact's data.
+async fn old_databases_list_summaries(
+    open: impl AsyncFn() -> Arc<dyn Store>,
+    exec: impl AsyncFn(String),
+) {
+    exec(OLD_SCHEMA.into()).await;
+    for (a, level) in results().into_iter().zip([0, 1]) {
+        exec(format!(
+            "INSERT INTO artifacts (id, parent_id, level, data, tags, created_at, updated_at) \
+             VALUES ('{}', {}, {level}, '{}', '[]', '{}', '{}')",
+            a.id,
+            a.parent_id.map_or("NULL".into(), |p| format!("'{p}'")),
+            a.data,
+            a.created_at,
+            a.created_at
+        ))
+        .await;
+    }
+    let check = async |s: Arc<dyn Store>| {
+        let (rows, total) = s.list_artifact_summaries(None, None, None).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rows[0].data["summary"]["aggregate"], json!({"crps": 1.5}));
+        assert_eq!(rows[1].data["summary"]["locations"], 2);
+        assert!(rows.iter().all(|r| r.data.get("content").is_none()));
+        let d1 = ["D1".to_owned()];
+        let (rows, total) = s
+            .list_artifact_summaries(Some("ml_backtest"), Some(&d1), None)
+            .await
+            .unwrap();
+        assert_eq!((total, rows[0].id.as_str()), (1, "R1"));
+    };
+    check(open().await).await;
+    exec(
+        "UPDATE artifact_listings SET listing = '{\"type\": \"ml_backtest\"}' WHERE id = 'R1'"
+            .into(),
+    )
+    .await;
+    check(open().await).await;
+}
+
+/// The whole contract, each part on a fresh store from `s`; every backend runs all of it.
+async fn suite<F: std::future::Future<Output = Arc<dyn Store>>>(s: impl Fn() -> F) {
+    configs_crud_and_conflict(s().await).await;
+    lists_filter_by_name_and_dataset(s().await).await;
+    artifact_tree_links_and_cascade(s().await).await;
+    datasets_crud_and_artifact_types(s().await).await;
+    listings_carry_summaries_not_content(s().await).await;
 }
 
 #[tokio::test]
 async fn sqlite_in_memory() {
-    suite(|| Arc::new(chapkit_store::SqliteStore::in_memory().unwrap())).await;
+    suite(|| async {
+        Arc::new(chapkit_store::SqliteStore::in_memory().unwrap()) as Arc<dyn Store>
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -265,9 +387,10 @@ async fn sqlite_file_and_urls() {
     suite(move || {
         let i = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let path = dir2.join(format!("db{i}.sqlite"));
-        Arc::new(
+        let s: Arc<dyn Store> = Arc::new(
             chapkit_store::open_sqlite(Some(&format!("sqlite:///{}", path.display()))).unwrap(),
-        )
+        );
+        async move { s }
     })
     .await;
     assert!(
@@ -279,14 +402,49 @@ async fn sqlite_file_and_urls() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[tokio::test]
+async fn sqlite_old_databases_list_summaries() {
+    let path = std::env::temp_dir().join(format!("chapkit-old-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    old_databases_list_summaries(
+        async || Arc::new(chapkit_store::SqliteStore::open(&path).unwrap()) as Arc<dyn Store>,
+        async |sql: String| {
+            rusqlite::Connection::open(&path)
+                .unwrap()
+                .execute_batch(&sql)
+                .unwrap();
+        },
+    )
+    .await;
+    let _ = std::fs::remove_file(&path);
+}
+
+#[cfg(feature = "turso")]
+#[tokio::test]
+async fn turso_old_databases_list_summaries() {
+    let path = std::env::temp_dir().join(format!("chapkit-old-{}.turso", std::process::id()));
+    let file = path.display().to_string();
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{file}{suffix}"));
+    }
+    let url = format!("turso:///{file}");
+    old_databases_list_summaries(
+        async || chapkit_store::open(Some(&url)).await.unwrap(),
+        async |sql: String| {
+            let db = turso::Builder::new_local(&file).build().await.unwrap();
+            db.connect().unwrap().execute(&sql, ()).await.unwrap();
+        },
+    )
+    .await;
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{file}{suffix}"));
+    }
+}
+
 #[cfg(feature = "turso")]
 #[tokio::test]
 async fn turso_in_memory() {
-    configs_crud_and_conflict(chapkit_store::open(Some("turso::memory:")).await.unwrap()).await;
-    artifact_tree_links_and_cascade(chapkit_store::open(Some("turso::memory:")).await.unwrap())
-        .await;
-    datasets_crud_and_artifact_types(chapkit_store::open(Some("turso::memory:")).await.unwrap())
-        .await;
+    suite(|| async { chapkit_store::open(Some("turso::memory:")).await.unwrap() }).await;
 }
 
 #[cfg(not(feature = "turso"))]

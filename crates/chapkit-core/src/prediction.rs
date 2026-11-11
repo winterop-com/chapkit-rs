@@ -22,9 +22,18 @@ pub fn set_max_prediction_cells(cells: usize) {
     MAX_PREDICTION_CELLS.store(cells, Ordering::Relaxed);
 }
 
+/// The most samples a forecast has, whatever its row count: every sample is a column, allocated even for
+/// an empty future. The model packages cap `n_samples` at the same value; chap-core asks for 100 to 1,000.
+pub const MAX_PREDICTION_SAMPLES: usize = 100_000;
+
 /// Refuse a forecast of `rows` future rows with `n_samples` samples each over
-/// [`max_prediction_cells`].
+/// [`max_prediction_cells`], or with more than [`MAX_PREDICTION_SAMPLES`] samples.
 pub(crate) fn check_prediction_cells(rows: usize, n_samples: usize) -> Result<()> {
+    if n_samples > MAX_PREDICTION_SAMPLES {
+        return Err(Error::invalid(format!(
+            "n_samples is {n_samples}, more than the limit of {MAX_PREDICTION_SAMPLES}"
+        )));
+    }
     let (cells, max) = (rows.saturating_mul(n_samples), max_prediction_cells());
     if cells > max {
         return Err(Error::invalid(format!(
@@ -82,7 +91,8 @@ mod tests {
             (cols::LOCATION, Column::from_strs(["A"])),
         ])
         .unwrap();
-        let e = prediction_frame(&future, DEFAULT_MAX_PREDICTION_CELLS + 1, |_, _| Ok(()))
+        let rows = DEFAULT_MAX_PREDICTION_CELLS / MAX_PREDICTION_SAMPLES + 1;
+        let e = check_prediction_cells(rows, MAX_PREDICTION_SAMPLES)
             .unwrap_err()
             .to_string();
         assert!(e.contains("CHAPKIT_MAX_PREDICTION_CELLS"), "{e}");
@@ -91,5 +101,21 @@ mod tests {
             .to_string();
         assert!(e.contains("more than the limit"), "{e}");
         assert!(check_prediction_cells(100_000 * 12, 100).is_ok());
+    }
+
+    /// An empty future still allocates one column per sample, so the samples are bounded on their own.
+    #[test]
+    fn empty_future_bounds_samples() {
+        let future = DataFrame::from_columns(vec![
+            (cols::TIME_PERIOD, Column::from_strs(Vec::<&str>::new())),
+            (cols::LOCATION, Column::from_strs(Vec::<&str>::new())),
+        ])
+        .unwrap();
+        let e = prediction_frame(&future, usize::MAX, |_, _| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("n_samples"), "{e}");
+        let out = prediction_frame(&future, 3, |_, _| Ok(())).unwrap();
+        assert_eq!((out.n_rows(), out.n_cols()), (0, 5));
     }
 }

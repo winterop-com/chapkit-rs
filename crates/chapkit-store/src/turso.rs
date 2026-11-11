@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use turso::{Builder, Connection, Value};
 
 use crate::{
-    ArtifactRow, ConfigRow, DatasetRow, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
+    ArtifactRow, ConfigRow, DatasetRow, Listing, MAX_DEPTH, NewArtifact, Page, Store, StoreError,
     StoreResult,
 };
 
@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS artifacts_parent ON artifacts(parent_id);
+CREATE TABLE IF NOT EXISTS artifact_listings (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT,
+    dataset_id TEXT,
+    listing    TEXT NOT NULL,
+    tags       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS artifact_listings_kind ON artifact_listings(kind, dataset_id);
 CREATE TABLE IF NOT EXISTS config_artifacts (
     config_id   TEXT NOT NULL,
     artifact_id TEXT NOT NULL PRIMARY KEY
@@ -251,7 +261,77 @@ async fn delete_one_artifact(c: &Connection, id: &str) -> StoreResult<u64> {
         vec![s(id)],
     )
     .await?;
+    exec(
+        c,
+        "DELETE FROM artifact_listings WHERE id = ?1",
+        vec![s(id)],
+    )
+    .await?;
     exec(c, "DELETE FROM artifacts WHERE id = ?1", vec![s(id)]).await
+}
+
+/// Write `id`'s listing row, replacing one there was.
+async fn put_listing(
+    c: &Connection,
+    id: &str,
+    data: &Json,
+    tags: Value,
+    created_at: &str,
+    updated_at: &str,
+) -> StoreResult<()> {
+    let l = Listing::of(data)?;
+    exec(
+        c,
+        "DELETE FROM artifact_listings WHERE id = ?1",
+        vec![s(id)],
+    )
+    .await?;
+    exec(
+        c,
+        "INSERT INTO artifact_listings (id, kind, dataset_id, listing, tags, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        vec![
+            s(id),
+            opt_text(l.kind.as_deref()),
+            opt_text(l.dataset_id.as_deref()),
+            Value::Text(l.text),
+            tags,
+            s(created_at),
+            s(updated_at),
+        ],
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Give every artifact without a listing row one: those of a database from before listings
+/// (one at a time, so only one artifact's data is in memory). A no-op afterwards.
+async fn backfill_listings(c: &Connection) -> StoreResult<()> {
+    let ids = rows(
+        c,
+        "SELECT id FROM artifacts WHERE id NOT IN (SELECT id FROM artifact_listings)",
+        vec![],
+    )
+    .await?;
+    for r in ids {
+        let Some(id) = r.into_iter().next() else {
+            continue;
+        };
+        let id = as_str(id)?;
+        let Some(row) = get_artifact(c, &id).await? else {
+            continue;
+        };
+        put_listing(
+            c,
+            &id,
+            &row.data,
+            text(&row.tags)?,
+            &row.created_at,
+            &row.updated_at,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn page_sql(page: Option<Page>) -> String {
@@ -273,6 +353,7 @@ impl TursoStore {
         let database = Builder::new_local(path).build().await.map_err(|e| db(&e))?;
         let conn = database.connect().map_err(|e| db(&e))?;
         conn.execute_batch(SCHEMA).await.map_err(|e| db(&e))?;
+        backfill_listings(&conn).await?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -429,6 +510,15 @@ impl Store for TursoStore {
             ],
         )
         .await?;
+        put_listing(
+            &c,
+            &a.id,
+            &a.data,
+            text(&a.tags)?,
+            &a.created_at,
+            &a.created_at,
+        )
+        .await?;
         get_artifact(&c, &a.id)
             .await?
             .ok_or_else(|| StoreError::Database("artifact vanished after insert".into()))
@@ -480,13 +570,13 @@ impl Store for TursoStore {
         Ok((list, total))
     }
 
-    async fn list_artifacts_of_type(
+    async fn list_artifact_summaries(
         &self,
-        kind: &str,
+        kind: Option<&str>,
         datasets: Option<&[String]>,
         page: Option<Page>,
     ) -> StoreResult<(Vec<ArtifactRow>, u64)> {
-        if datasets.is_some_and(<[String]>::is_empty) {
+        if kind.is_some() && datasets.is_some_and(<[String]>::is_empty) {
             return Ok((Vec::new(), 0));
         }
         let (filter, args) = crate::type_filter(kind, datasets);
@@ -494,19 +584,36 @@ impl Store for TursoStore {
         let c = self.conn.lock().await;
         let total = count(
             &c,
-            &format!("SELECT COUNT(*) FROM artifacts{filter}"),
+            &format!("SELECT COUNT(*) FROM artifact_listings l{filter}"),
             args.clone(),
         )
         .await?;
         let sql = format!(
-            "SELECT {ARTIFACT_COLS} FROM artifacts{filter} ORDER BY id{}",
+            "SELECT l.id, a.parent_id, a.level, l.listing, l.tags, l.created_at, l.updated_at
+             FROM artifact_listings l JOIN artifacts a ON a.id = l.id{filter} ORDER BY l.id{}",
             page_sql(page)
         );
-        let list = rows(&c, &sql, args)
+        let mut list: Vec<ArtifactRow> = rows(&c, &sql, args)
             .await?
             .into_iter()
             .map(artifact_from)
             .collect::<StoreResult<_>>()?;
+        for row in list.iter_mut().filter(|r| crate::lacks_summary(&r.data)) {
+            if let Some(full) = get_artifact(&c, &row.id).await? {
+                let l = Listing::of(&full.data)?;
+                put_listing(
+                    &c,
+                    &row.id,
+                    &full.data,
+                    text(&full.tags)?,
+                    &full.created_at,
+                    &full.updated_at,
+                )
+                .await?;
+                row.data = serde_json::from_str(&l.text)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+        }
         Ok((list, total))
     }
 
@@ -525,10 +632,13 @@ impl Store for TursoStore {
         )
         .await?;
         if n == 0 {
-            Ok(None)
-        } else {
-            get_artifact(&c, id).await
+            return Ok(None);
         }
+        let row = get_artifact(&c, id).await?;
+        if let Some(r) = &row {
+            put_listing(&c, id, &data, text(&tags)?, &r.created_at, &updated_at).await?;
+        }
+        Ok(row)
     }
 
     async fn delete_artifact(&self, id: &str) -> StoreResult<bool> {

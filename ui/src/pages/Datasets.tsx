@@ -4,7 +4,7 @@ import { FileField, type CheckedRefusal } from '@winterop-com/sokkel-ui/FileFiel
 import { useCommands } from '@winterop-com/sokkel-ui/hooks/use-commands'
 import { useShortcuts } from '@winterop-com/sokkel-ui/hooks/use-shortcuts'
 import { Stack } from '@winterop-com/sokkel-ui/Layout'
-import { keyLabels } from '@winterop-com/sokkel-ui/lib/keys'
+import { bindingKeys } from '@winterop-com/sokkel-ui/lib/keys'
 import { PageHeader } from '@winterop-com/sokkel-ui/PageHeader'
 import { Problem } from '@winterop-com/sokkel-ui/Problem'
 import { TextField } from '@winterop-com/sokkel-ui/TextField'
@@ -161,7 +161,7 @@ export function Datasets() {
     }
     useShortcuts([{ id: UPLOAD_DATASET, key: 'u', label: 'Upload a dataset', group: 'Datasets', run: () => setUpload(NOTHING) }], [])
     useCommands(
-        [{ title: ACTIONS, rank: 10, commands: [{ id: UPLOAD_DATASET, label: 'Upload a dataset', icon: Upload, keys: keyLabels({ key: 'u' }), onSelect: () => setUpload(NOTHING) }] }],
+        [{ title: ACTIONS, rank: 10, commands: [{ id: UPLOAD_DATASET, label: 'Upload a dataset', icon: Upload, ...bindingKeys({ key: 'u' }), onSelect: () => setUpload(NOTHING) }] }],
         [],
     )
     const [removing, setRemoving] = useState<Dataset | null>(null)

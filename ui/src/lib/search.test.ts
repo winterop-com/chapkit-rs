@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 
 import type { Artifact, Config, Dataset, EvaluationSummary, ForecastSummary, Page } from '../api/types'
-import { resultRoute, searchGroups, searchService, unnamed, type Found } from './search'
+import { findPages, joinFound, nextPages, resultRoute, searchGroups, searchService, unnamed, type Found } from './search'
 
 const page = <T>(items: T[], total = items.length): Page<T> => ({ items, total, page: 1, size: 5, pages: 1 })
 
@@ -89,4 +89,22 @@ test('a search asks the service for a few of each kind by name, and the names of
     ])
     expect(urls[4]).toBe('/api/v1/datasets/D9')
     expect(groups[1]!.results[0]!.title).toBe('laos weekly')
+})
+
+test('the full results read on: the next page of each kind with more, joined after the pages before', async () => {
+    const first: Partial<Found> = { datasets: page([dataset('D1', 'a'), dataset('D2', 'b')], 3), evaluations: page([evaluation('E1', null)], 1), configs: page<Config>([]) }
+    expect(nextPages(first, 2)).toEqual({ datasets: 2 })
+    expect(nextPages(first, 2, ['evaluations', 'configs'])).toEqual({})
+    const joined = joinFound(first, { datasets: page([dataset('D3', 'c')], 3) })
+    expect(joined.datasets!.items.map((each) => each.id)).toEqual(['D1', 'D2', 'D3'])
+    expect(joined.evaluations!.items).toHaveLength(1)
+    expect(nextPages(joined, 2)).toEqual({})
+
+    const urls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+        urls.push(String(input))
+        return new Response(JSON.stringify(page([])), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    await findPages('laos', { datasets: 2, forecasts: 3 }, 25, new AbortController().signal)
+    expect(urls).toEqual(['/api/v1/datasets?q=laos&page=2&size=25', '/api/v1/artifacts?type=ml_forecast&order=desc&page=3&size=25&q=laos'])
 })

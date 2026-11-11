@@ -49,9 +49,15 @@ export function setApiKey(key: string | undefined): void {
     change({ key: given, wanted: false, version: state.version + 1 })
 }
 
-/** Says a request was refused with 401: the key is missing or wrong. */
-export function keyRefused(): void {
-    if (!state.wanted) change({ wanted: true })
+/** The generation of the key in use, which a request keeps to say which key it was sent with. */
+export const keyVersion = (): number => state.version
+
+/**
+ * Says a request sent with the key of generation `version` was refused with 401: the key is
+ * missing or wrong. A refusal of an older key, answered after a new one was given, is ignored.
+ */
+export function keyRefused(version: number): void {
+    if (version === state.version && !state.wanted) change({ wanted: true })
 }
 
 /** Stops asking for a key until a request is refused again. */

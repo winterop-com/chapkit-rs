@@ -538,12 +538,11 @@ async fn config_covariates(s: &AppState, cid: &str) -> ApiResult<Vec<String>> {
         .data
         .get("additional_continuous_covariates")
         .and_then(serde_json::Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect()
-        })
-        .unwrap_or_default())
+        }))
 }
 
 /// A checked `$generate-sample-data` request, within the cell limit.

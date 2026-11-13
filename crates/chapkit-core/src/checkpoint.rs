@@ -143,8 +143,7 @@ impl Provenance {
         self.trained_until = last_period(data).map(|p| p.to_string());
         self.locations = data
             .group_indices(cols::LOCATION)
-            .map(|g| g.into_iter().map(|(loc, _)| loc).collect())
-            .unwrap_or_default();
+            .map_or_default(|g| g.into_iter().map(|(loc, _)| loc).collect());
         self
     }
 

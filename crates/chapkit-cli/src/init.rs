@@ -52,8 +52,7 @@ impl Names {
         let capitalize = |w: &str| {
             let mut c = w.chars();
             c.next()
-                .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
-                .unwrap_or_default()
+                .map_or_default(|f| f.to_ascii_uppercase().to_string() + c.as_str())
         };
         Ok(Self {
             name: name.to_owned(),

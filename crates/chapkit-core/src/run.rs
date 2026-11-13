@@ -34,12 +34,11 @@ impl RunInfo {
             additional_continuous_covariates: config
                 .get("additional_continuous_covariates")
                 .and_then(serde_json::Value::as_array)
-                .map(|a| {
+                .map_or_default(|a| {
                     a.iter()
                         .filter_map(|v| v.as_str().map(str::to_owned))
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
             future_covariate_origin: None,
         }
     }

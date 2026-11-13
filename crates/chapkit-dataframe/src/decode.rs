@@ -414,14 +414,12 @@ fn assemble(
         }
         builders = columns.iter().map(|_| Builder::Empty(0)).collect();
     }
-    let types: HashMap<&str, DType> = schema
-        .map(|s| {
-            s.fields
-                .iter()
-                .map(|f| (f.name.as_str(), DType::parse(&f.r#type)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let types: HashMap<&str, DType> = schema.map_or_default(|s| {
+        s.fields
+            .iter()
+            .map(|f| (f.name.as_str(), DType::parse(&f.r#type)))
+            .collect()
+    });
     let mut df = DataFrame::new();
     for (name, b) in columns.into_iter().zip(builders) {
         let dtype = types.get(name.as_str()).copied();

@@ -70,12 +70,11 @@ pub(crate) fn resolve_run(
             config
                 .get("additional_continuous_covariates")
                 .and_then(Value::as_array)
-                .map(|a| {
+                .map_or_default(|a| {
                     a.iter()
                         .filter_map(|v| v.as_str().map(str::to_owned))
                         .collect()
                 })
-                .unwrap_or_default()
         });
     Ok(RunInfo {
         prediction_periods: periods,

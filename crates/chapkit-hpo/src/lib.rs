@@ -376,8 +376,7 @@ where
     let n_successful_trials = leaderboard.len();
     let (best_params, best_score) = leaderboard
         .first()
-        .map(|t| (t.params.clone(), t.score.unwrap_or(f64::NAN)))
-        .unwrap_or_default();
+        .map_or_default(|t| (t.params.clone(), t.score.unwrap_or(f64::NAN)));
     leaderboard.extend(failed);
     Ok(Search {
         method: options.method,

@@ -79,15 +79,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 schemars = "1"
-rand = { version = "0.9", features = ["small_rng"] }
-rand_distr = "0.5"
 safetensors = "0.8"
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-axum = "0.3"
 utoipa-scalar = { version = "0.4", features = ["axum"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["trace"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -96,7 +94,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 http-body-util = "0.1"
-lru = "0.16"
+lru = "0.19"
 rayon = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"

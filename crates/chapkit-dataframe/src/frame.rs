@@ -327,16 +327,12 @@ impl DataFrame {
     #[cfg(test)]
     pub(crate) fn from_wire_reference(w: Wire) -> Result<Self, FrameError> {
         let width = w.columns.len();
-        let types: HashMap<&str, DType> = w
-            .schema
-            .as_ref()
-            .map(|s| {
-                s.fields
-                    .iter()
-                    .map(|f| (f.name.as_str(), DType::parse(&f.r#type)))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let types: HashMap<&str, DType> = w.schema.as_ref().map_or_default(|s| {
+            s.fields
+                .iter()
+                .map(|f| (f.name.as_str(), DType::parse(&f.r#type)))
+                .collect()
+        });
         let n_rows = w.data.len();
         let mut cells: Vec<Vec<Value>> = (0..width).map(|_| Vec::with_capacity(n_rows)).collect();
         for (r, row) in w.data.into_iter().enumerate() {

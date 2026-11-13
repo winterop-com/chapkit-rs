@@ -85,13 +85,12 @@ impl ServiceInfo {
             required_covariates: v
                 .get("required_covariates")
                 .and_then(Value::as_array)
-                .map(|a| {
+                .map_or_default(|a| {
                     a.iter()
                         .filter_map(Value::as_str)
                         .map(str::to_owned)
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
             requires_geo: flag("requires_geo"),
             allow_free_covariates: flag("allow_free_additional_continuous_covariates"),
             min_periods: number("min_prediction_periods", 0),
@@ -535,13 +534,12 @@ async fn create_config(
     let covariates = data
         .get("additional_continuous_covariates")
         .and_then(Value::as_array)
-        .map(|a| {
+        .map_or_default(|a| {
             a.iter()
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     let name = format!("chapkit-rs-test-{}-{i}", std::process::id());
     let res = c
         .post("/api/v1/configs", &json!({"name": name, "data": data}), 201)
@@ -696,8 +694,7 @@ async fn check_forecast(c: &Client, prediction_id: &str, future_rows: usize) -> 
     let content = field(data, "content", "forecast artifact")?;
     let columns: Vec<&str> = field(content, "columns", "forecast")?
         .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|a| a.iter().filter_map(Value::as_str).collect());
     if columns.first() != Some(&"time_period") || columns.get(1) != Some(&"location") {
         return Err(format!(
             "forecast columns start with {columns:?}, expected time_period, location"

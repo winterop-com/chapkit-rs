@@ -65,6 +65,16 @@ export function ReadState({
     )
 }
 
+/** A listing's failed read, for `DataTable`'s `error`, `status` and `onRetry`: said in place of its rows. */
+export function readFailure(what: string, resource: Resource<unknown>) {
+    const error = resource.error
+    return {
+        error: error === undefined ? undefined : `Could not read ${what}: ${error.detail ?? error.message}`,
+        status: error?.status,
+        onRetry: resource.reload,
+    }
+}
+
 /** How a job the page started ended, when it did not complete. */
 export type JobEnd = 'failed' | 'canceled' | 'gone'
 

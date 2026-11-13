@@ -1,0 +1,1 @@
+function e(e,t){return e.type===t}function t(e){var t=e.dimensions;return t[0]===`lng`&&t[1]===`lat`&&!!e.getViewRect}export{t as n,e as t};

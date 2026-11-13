@@ -1,1 +1,0 @@
-import{t as e}from"./extension-BPI8Mi85.js";import{t}from"./install-C7pe_WPJ.js";e(t);

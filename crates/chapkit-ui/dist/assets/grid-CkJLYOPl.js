@@ -1,0 +1,1 @@
+import{t as e}from"./extension-BFxDQMOz.js";import{t}from"./installSimple-DMOPgj6_.js";import{n}from"./engine-CTC3G25J.js";function r(r){e(t),e(n)}e(r);

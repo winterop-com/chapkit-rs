@@ -17,7 +17,7 @@ import type { Artifact } from '../api/types'
 import { bytes, dateOf, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go } from '../lib/router'
-import { ReadState } from '../parts'
+import { readFailure } from '../parts'
 
 const TYPE_WORDS: Record<string, string> = {
     ml_backtest: 'Evaluation',
@@ -135,7 +135,8 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
     return (
         <>
             <PageHeader title="Artifacts" count={artifacts.data?.length} description="What the service stored: evaluations, forecasts, trained models and predictions." />
-            {artifacts.error ? <ReadState what="the artifacts" resource={artifacts} primary /> : <DataTable
+            <DataTable
+                {...readFailure('the artifacts', artifacts)}
                 columns={COLUMNS}
                 rows={roots}
                 rowKey={(row) => row.id}
@@ -155,7 +156,7 @@ export function Artifacts({ opened }: { opened: string | undefined }) {
                     { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
                 ]}
                 empty="Nothing stored yet. Evaluations and forecasts are kept here."
-            />}
+            />
             <ConfirmDialog
                 open={removing !== null}
                 onOpenChange={(open) => !open && setRemoving(null)}

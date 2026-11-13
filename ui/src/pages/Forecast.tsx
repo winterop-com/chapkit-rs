@@ -24,6 +24,7 @@ import {
     HistoryNote,
     JobProgress,
     LocationPicker,
+    readFailure,
     ReadState,
     SelectField,
     useHistory,
@@ -237,32 +238,29 @@ function PastForecasts() {
     const names = useMemo(() => new Map((datasets.data ?? []).map((each) => [each.id, each.name])), [datasets.data])
     return (
         <Section title="Past forecasts" meta={history.data ? `${history.data.total}` : undefined} flush>
-            {history.error ? (
-                <ReadState what="the past forecasts" resource={history} />
-            ) : (
-                <DataTable
-                    columns={pastColumns(names)}
-                    rows={history.data?.items ?? []}
-                    rowKey={(row) => row.id}
-                    loading={history.loading}
-                    paging="server"
-                    total={history.data?.total}
-                    page={page}
-                    onPageChange={setPage}
-                    pageSize={size}
-                    onPageSizeChange={(next) => {
-                        setSize(next)
-                        setPage(0)
-                    }}
-                    pageSizes={[10, 25, 50, 100]}
-                    onOpen={(row) => go(`/forecast/${row.id}`)}
-                    chevron
-                    framed={false}
-                    bar={false}
-                    minWidth="36rem"
-                    empty="No forecast yet."
-                />
-            )}
+            <DataTable
+                {...readFailure('the past forecasts', history)}
+                columns={pastColumns(names)}
+                rows={history.data?.items ?? []}
+                rowKey={(row) => row.id}
+                loading={history.loading}
+                paging="server"
+                total={history.data?.total}
+                page={page}
+                onPageChange={setPage}
+                pageSize={size}
+                onPageSizeChange={(next) => {
+                    setSize(next)
+                    setPage(0)
+                }}
+                pageSizes={[10, 25, 50, 100]}
+                onOpen={(row) => go(`/forecast/${row.id}`)}
+                chevron
+                framed={false}
+                bar={false}
+                minWidth="36rem"
+                empty="No forecast yet."
+            />
         </Section>
     )
 }

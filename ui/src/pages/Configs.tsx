@@ -21,7 +21,7 @@ import { ACTIONS, NEW_CONFIG } from '../lib/commands'
 import { dateOf, when } from '../lib/format'
 import { go, hashParam } from '../lib/router'
 import { useResource } from '../lib/resource'
-import { ReadState } from '../parts'
+import { readFailure, ReadState } from '../parts'
 
 const said = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value))
 
@@ -185,7 +185,8 @@ function ConfigList() {
                 }
             />
             <ReadState what="the model's options" resource={schema} tone="warning" />
-            {configs.error ? <ReadState what="the configs" resource={configs} primary /> : <DataTable
+            <DataTable
+                {...readFailure('the configs', configs)}
                 columns={COLUMNS}
                 rows={configs.data ?? []}
                 rowKey={(row) => row.id}
@@ -198,7 +199,7 @@ function ConfigList() {
                     { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
                 ]}
                 empty="No config yet. Evaluations and forecasts use the model defaults until you make one."
-            />}
+            />
             {creating && schema.data && (
                 <NewConfig
                     schema={schema.data}

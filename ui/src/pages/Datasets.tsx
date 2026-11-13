@@ -22,7 +22,7 @@ import { ACTIONS, GENERATE_DATASET, UPLOAD_DATASET } from '../lib/commands'
 import { count, dateOf, periodWord, when } from '../lib/format'
 import { useResource } from '../lib/resource'
 import { go, hashParam } from '../lib/router'
-import { ReadState } from '../parts'
+import { readFailure } from '../parts'
 import { GenerateDialog } from './GenerateDialog'
 
 /** The files a dataset is read from. */
@@ -224,45 +224,42 @@ export function Datasets() {
                     </>
                 }
             />
-            {datasets.error ? (
-                <ReadState what="the datasets" resource={datasets} primary />
-            ) : (
-                <DataTable
-                    columns={COLUMNS}
-                    rows={rows}
-                    rowKey={(row) => row.id}
-                    loading={datasets.loading}
-                    defaultSort={{ column: 'created', direction: 'desc' }}
-                    onOpen={(row) => go(`/datasets/${row.id}`)}
-                    chevron
-                    minWidth="56rem"
-                    rowActions={(row) => [
-                        { id: 'open', label: 'Open', onSelect: () => go(`/datasets/${row.id}`) },
-                        { id: 'evaluate', label: 'Evaluate on it', onSelect: () => go(`/evaluate?dataset=${row.id}`) },
-                        { id: 'forecast', label: 'Forecast from it', onSelect: () => go(`/forecast?dataset=${row.id}`) },
-                        { id: 'sep', separator: true },
-                        { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
-                    ]}
-                    empty={
-                        <Empty>
-                            <EmptyHeader>
-                                <EmptyTitle>No datasets yet</EmptyTitle>
-                                <EmptyDescription>Upload a CSV or JSON file, drop one on this page, or generate one to try the model.</EmptyDescription>
-                            </EmptyHeader>
-                            <EmptyContent>
-                                <div className="flex gap-2">
-                                    <Button size="sm" variant="outline" onClick={() => setUpload(NOTHING)}>
-                                        Upload a dataset
-                                    </Button>
-                                    <Button size="sm" variant="outline" onClick={() => setGenerating(true)}>
-                                        Generate a dataset
-                                    </Button>
-                                </div>
-                            </EmptyContent>
-                        </Empty>
-                    }
-                />
-            )}
+            <DataTable
+                {...readFailure('the datasets', datasets)}
+                columns={COLUMNS}
+                rows={rows}
+                rowKey={(row) => row.id}
+                loading={datasets.loading}
+                defaultSort={{ column: 'created', direction: 'desc' }}
+                onOpen={(row) => go(`/datasets/${row.id}`)}
+                chevron
+                minWidth="56rem"
+                rowActions={(row) => [
+                    { id: 'open', label: 'Open', onSelect: () => go(`/datasets/${row.id}`) },
+                    { id: 'evaluate', label: 'Evaluate on it', onSelect: () => go(`/evaluate?dataset=${row.id}`) },
+                    { id: 'forecast', label: 'Forecast from it', onSelect: () => go(`/forecast?dataset=${row.id}`) },
+                    { id: 'sep', separator: true },
+                    { id: 'delete', label: 'Delete', destructive: true, onSelect: () => setRemoving(row) },
+                ]}
+                empty={
+                    <Empty>
+                        <EmptyHeader>
+                            <EmptyTitle>No datasets yet</EmptyTitle>
+                            <EmptyDescription>Upload a CSV or JSON file, drop one on this page, or generate one to try the model.</EmptyDescription>
+                        </EmptyHeader>
+                        <EmptyContent>
+                            <div className="flex gap-2">
+                                <Button size="sm" variant="outline" onClick={() => setUpload(NOTHING)}>
+                                    Upload a dataset
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => setGenerating(true)}>
+                                    Generate a dataset
+                                </Button>
+                            </div>
+                        </EmptyContent>
+                    </Empty>
+                }
+            />
             </Stack>
             {upload !== null && (
                 <UploadDialog

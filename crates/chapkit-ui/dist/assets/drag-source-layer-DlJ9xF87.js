@@ -1,0 +1,1 @@
+import{a as e,i as t}from"./DragDrop-BLGWOy8z.js";function n({id:n,drag:r,children:i}){let a=t(),{ref:o,handle:s,dragging:c}=e({id:n,data:r,disabled:!a});return i(a?{ref:o,press:{onPointerDown:s.onPointerDown,onTouchStart:s.onTouchStart},grip:s,dragging:c,enabled:!0}:{press:{},dragging:!1,enabled:!1})}export{n as DragSourceItem};

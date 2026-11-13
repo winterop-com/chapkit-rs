@@ -1,0 +1,1 @@
+import{n as e}from"./axisSnippets--_PbBvpC.js";import{d as t}from"./axisStatistics-BHKshzOK.js";var n=`pictorialBar`;function r(n,r,i,a){t(n,{key:r,seriesType:i,coordSysType:a,getMetrics:e})}function i(e){return e.scale.rawExtentInfo.makeRenderInfo().startValue}export{i as n,r,n as t};

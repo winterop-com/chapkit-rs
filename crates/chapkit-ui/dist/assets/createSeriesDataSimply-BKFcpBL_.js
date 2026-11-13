@@ -1,0 +1,1 @@
+import{t as e}from"./createDimensions-C3x5JYiI.js";import{t}from"./SeriesData-zw6NxFv7.js";import{Dn as n,xn as r}from"./dashStyle-DcTv5IxS.js";function i(i,a,o){a=n(a)&&{coordDimensions:a}||r({encodeDefine:i.getEncode()},a);var s=i.getSource(),c=e(s,a).dimensions,l=new t(c,i);return l.initData(s,o),l}export{i as t};

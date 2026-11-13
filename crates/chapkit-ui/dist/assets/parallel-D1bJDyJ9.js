@@ -1,0 +1,1 @@
+import{t as e}from"./extension-BFxDQMOz.js";import{t}from"./install-DbCtvegT.js";e(t);
